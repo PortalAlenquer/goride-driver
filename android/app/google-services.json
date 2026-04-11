@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "316798941408",
+    "project_id": "tapajosweb-transporte",
+    "storage_bucket": "tapajosweb-transporte.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:316798941408:android:42a82027251aa8e4537885",
+        "android_client_info": {
+          "package_name": "com.tapajosweb.goride"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD8ix_qsDbdkh2SXzV6pS6_JQYcAXaR75A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:316798941408:android:2b8468ee6b8ceb55537885",
+        "android_client_info": {
+          "package_name": "com.tapajosweb.goride_driver"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD8ix_qsDbdkh2SXzV6pS6_JQYcAXaR75A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

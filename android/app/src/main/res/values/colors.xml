@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Cor primária do app para notificações FCM -->
+    <color name="notification_color">#10B981</color>
+
+    <!-- Cor de fundo do splash/launch screen -->
+    <color name="launch_background">#10B981</color>
+</resources>
