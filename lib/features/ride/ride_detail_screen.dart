@@ -7,12 +7,14 @@ import '../../core/helpers/maps_helper.dart';
 import '../../core/models/ride_model.dart';
 import '../../core/services/ride_service.dart';
 import '../../core/services/chat_service.dart';
+import '../../core/services/websocket_service.dart';
 import '../chat/chat_screen.dart';
 import '../home/widgets/home_ride_request_sheet.dart';
 import 'widgets/ride_header_btn.dart';
 import 'widgets/ride_status_stepper.dart';
 import 'widgets/ride_passenger_card.dart';
 import 'widgets/ride_action_cards.dart';
+import 'widgets/slide_action_button.dart'; // RideSlider + SlideActionButton
 
 class RideDetailScreen extends StatefulWidget {
   final String rideId;
@@ -25,6 +27,7 @@ class RideDetailScreen extends StatefulWidget {
 class _RideDetailScreenState extends State<RideDetailScreen> {
   final _rideService = RideService();
   final _chat        = ChatService();
+  final _ws          = WebSocketService();
 
   GoogleMapController? _mapController;
   RideModel? _ride;
@@ -36,21 +39,80 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
   LatLng? _originLatLng;
   LatLng? _destinationLatLng;
 
-  // ── Back-to-back ──────────────────────────────────────────────
-  RideModel? _nextRide;       // próxima corrida enfileirada
-  bool _sheetShowing = false; // evita abrir sheet duplo
+  // Flag: evita chamar _buildMap antes do controller existir
+  bool _mapReady = false;
+
+  // back-to-back
+  RideModel? _nextRide;
+  bool _sheetShowing = false;
 
   @override
   void initState() {
     super.initState();
     _loadRide();
+    _connectWS();
     _startPolling();
   }
 
   @override
   void dispose() {
     _mapController?.dispose();
+    _ws
+      ..off('ride.status.updated')
+      ..off('driver.location.updated')
+      ..leaveRide(widget.rideId);
     super.dispose();
+  }
+
+  // ── WebSocket ─────────────────────────────────────────────────
+
+  Future<void> _connectWS() async {
+    await _ws.connect();
+    await _ws.subscribeToRide(widget.rideId);
+
+    _ws.on('ride.status.updated', (payload) async {
+      if (!mounted) return;
+      final newStatus = payload['status']?.toString();
+      if (newStatus == null) return;
+      if (_ride != null) {
+        setState(() => _ride = _ride!.copyWithStatus(newStatus));
+      }
+      // Reload completo em transições críticas
+      if (newStatus == 'cancelled' || newStatus == 'payment_confirmed') {
+        await _loadRide();
+      }
+    });
+
+    _ws.on('driver.location.updated', (payload) {
+      if (!mounted) return;
+      final lat = double.tryParse(payload['lat']?.toString() ?? '');
+      final lng = double.tryParse(payload['lng']?.toString() ?? '');
+      if (lat == null || lng == null) return;
+      final pos = LatLng(lat, lng);
+      final updated = Set<Marker>.from(_markers)
+        ..removeWhere((m) => m.markerId.value == 'driver')
+        ..add(Marker(
+          markerId: const MarkerId('driver'),
+          position: pos,
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueViolet),
+          infoWindow: const InfoWindow(title: 'Você'),
+        ));
+      setState(() => _markers = updated);
+    });
+  }
+
+  // ── Polling fallback — 8s ─────────────────────────────────────
+
+  void _startPolling() {
+    Future.doWhile(() async {
+      await Future.delayed(const Duration(seconds: 8));
+      if (!mounted) return false;
+      if (_ride != null && !_ride!.isActive) return false;
+      await _loadRide();
+      if (_ride?.status == 'in_progress') await _checkNextRide();
+      return mounted;
+    });
   }
 
   // ── Carregamento ──────────────────────────────────────────────
@@ -58,20 +120,24 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
   Future<void> _loadRide() async {
     try {
       final ride = await _rideService.getRide(widget.rideId);
-      setState(() {
-        _ride    = ride;
-        _loading = false;
-      });
-      await _buildMap();
+      if (!mounted) return;
+      setState(() { _ride = ride; _loading = false; });
+      // Só atualiza o mapa se o controller já existir
+      if (_mapReady) await _buildMap();
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
   }
 
   // ── Mapa ──────────────────────────────────────────────────────
+  //
+  // FIX tela escura:
+  // - onMapCreated apenas salva o controller e seta _mapReady = true
+  // - _buildMap() só é chamado depois que _ride E o controller existem
+  // - Nenhum setState dentro do onMapCreated
 
   Future<void> _buildMap() async {
-    if (_ride == null) return;
+    if (_ride == null || _mapController == null) return;
 
     final oLat = _ride!.originLat;
     final oLng = _ride!.originLng;
@@ -82,8 +148,7 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
 
     _originLatLng      = LatLng(oLat, oLng);
     _destinationLatLng = (dLat != null && dLng != null)
-        ? LatLng(dLat, dLng)
-        : null;
+        ? LatLng(dLat, dLng) : null;
 
     final markers = <Marker>{};
 
@@ -93,8 +158,7 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
       icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
       infoWindow: InfoWindow(
         title:   'Embarque',
-        snippet: _ride!.originAddress ?? '',
-      ),
+        snippet: _ride!.originAddress ?? ''),
     ));
 
     if (_destinationLatLng != null) {
@@ -104,16 +168,16 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
         infoWindow: InfoWindow(
           title:   'Destino',
-          snippet: _ride!.destinationAddress ?? '',
-        ),
+          snippet: _ride!.destinationAddress ?? ''),
       ));
     }
 
+    if (!mounted) return;
     setState(() => _markers = markers);
 
     if (_destinationLatLng != null) {
-      final centerLat = (oLat + dLat!) / 2;
-      final centerLng = (oLng + dLng!) / 2;
+      final centerLat = (oLat + (dLat ?? oLat)) / 2;
+      final centerLng = (oLng + (dLng ?? oLng)) / 2;
       _mapController?.animateCamera(
         CameraUpdate.newLatLngZoom(LatLng(centerLat, centerLng), 13));
       await _drawPolyline();
@@ -125,14 +189,11 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
 
   Future<void> _drawPolyline() async {
     if (_originLatLng == null || _destinationLatLng == null) return;
-
     final points = await MapsHelper.getRoute(
       origin:      _originLatLng!,
       destination: _destinationLatLng!,
     );
-
     if (points.isEmpty || !mounted) return;
-
     setState(() {
       _polylines = {
         Polyline(
@@ -148,28 +209,10 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
     });
   }
 
-  // ── Polling ───────────────────────────────────────────────────
-
-  void _startPolling() {
-    Future.doWhile(() async {
-      await Future.delayed(const Duration(seconds: 8));
-      if (!mounted) return false;
-      if (_ride != null && !_ride!.isActive) return false;
-      await _loadRide();
-
-      // Verifica próxima corrida apenas quando em viagem
-      if (_ride?.status == 'in_progress') {
-        await _checkNextRide();
-      }
-
-      return true;
-    });
-  }
-
   // ── Back-to-back ──────────────────────────────────────────────
 
   Future<void> _checkNextRide() async {
-    if (_nextRide != null) return; // já tem uma enfileirada
+    if (_nextRide != null) return;
     try {
       final rides = await _rideService.getPendingRides();
       if (rides.isNotEmpty && mounted) {
@@ -186,9 +229,9 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
       setState(() => _nextRide = null);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Próxima corrida confirmada!'),
+          content:         Text('Próxima corrida confirmada!'),
           backgroundColor: AppTheme.secondary,
-          duration: Duration(seconds: 3),
+          duration:        Duration(seconds: 3),
         ));
       }
     } catch (_) {}
@@ -196,31 +239,26 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
 
   Future<void> _rejectNextRide() async {
     if (_nextRide == null) return;
-    try {
-      await _rideService.rejectRide(_nextRide!.id);
-    } catch (_) {}
+    try { await _rideService.rejectRide(_nextRide!.id); } catch (_) {}
     if (mounted) setState(() => _nextRide = null);
   }
 
   void _showNextRideSheet() {
     if (_nextRide == null || _sheetShowing) return;
     _sheetShowing = true;
-
-    // Reutiliza HomeRideRequestSheet via toSheetMap()
     showModalBottomSheet(
-      context: context,
+      context:       context,
       isDismissible: false,
       enableDrag:    false,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => HomeRideRequestSheet(
         ride:     _nextRide!.toSheetMap(),
+        // Sheet fecha sozinho — NÃO chamar Navigator.pop nos callbacks
         onAccept: () async {
-          Navigator.pop(context);
           await _acceptNextRide();
         },
         onReject: () async {
-          Navigator.pop(context);
           await _rejectNextRide();
         },
       ),
@@ -233,15 +271,24 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
     setState(() => _actionBusy = true);
     try {
       await _rideService.updateStatus(widget.rideId, status);
+
+      // Navega para home — não faz mais nada após isso
+      if (status == 'payment_confirmed' || status == 'cancelled') {
+        if (mounted) context.go('/home');
+        return;
+      }
+
+      // Para outros status, recarrega os dados da corrida
       await _loadRide();
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Erro ao atualizar status. Tente novamente.'),
+          content:         Text('Erro ao atualizar status. Tente novamente.'),
           backgroundColor: AppTheme.danger,
         ));
       }
     } finally {
+      // Só faz setState se ainda estiver na tela
       if (mounted) setState(() => _actionBusy = false);
     }
   }
@@ -249,7 +296,6 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
   void _openChat() {
     final myId      = _ride?.driver?.userId ?? _ride?.driver?.id ?? '';
     final otherName = _ride?.passenger?.name ?? 'Passageiro';
-
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => ChatScreen(
         rideId:          widget.rideId,
@@ -262,39 +308,44 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
 
   // ── Helpers ───────────────────────────────────────────────────
 
-  String get _status => _ride?.status ?? '';
-  bool get _canChat  => _ride?.isActive ?? false;
+  String get _status  => _ride?.status ?? '';
+  bool   get _canChat => _ride?.isActive ?? false;
 
+  // Só retorna próximo para accepted e driver_arriving
+  // in_progress → completed e completed → payment_confirmed são tratados
+  // diretamente no build com RideSlider próprio
   String? get _nextStatus => switch (_status) {
     'accepted'        => 'driver_arriving',
     'driver_arriving' => 'in_progress',
-    'in_progress'     => 'completed',
-    'completed'       => 'payment_confirmed',
     _                 => null,
   };
 
-  String _nextLabel(String? next) => switch (next) {
-    'driver_arriving'   => 'Iniciar — A caminho',
-    'in_progress'       => 'Passageiro embarcou',
-    'completed'         => 'Finalizar corrida',
-    'payment_confirmed' => 'Confirmar recebimento',
-    _                   => '',
+  String _slideLabel(String next) => switch (next) {
+    'driver_arriving' => 'Deslize — A caminho',
+    'in_progress'     => 'Deslize — Passageiro embarcou',
+    'completed'       => 'Deslize — Finalizar corrida',
+    _                 => '',
   };
 
-  Color _nextColor(String? next) => switch (next) {
-    'driver_arriving'   => AppTheme.primary,
-    'in_progress'       => AppTheme.secondary,
-    'completed'         => AppTheme.danger,
-    'payment_confirmed' => Colors.green.shade600,
-    _                   => AppTheme.gray,
+  String? _slideSublabel(String next) => switch (next) {
+    'driver_arriving' => 'Confirme que está a caminho',
+    'in_progress'     => 'Inicie a viagem',
+    'completed'       => 'Chegou ao destino',
+    _                 => null,
   };
 
-  IconData _nextIcon(String? next) => switch (next) {
-    'driver_arriving'   => Icons.directions_car,
-    'in_progress'       => Icons.person,
-    'completed'         => Icons.flag,
-    'payment_confirmed' => Icons.check_circle,
-    _                   => Icons.circle,
+  Color _slideColor(String next) => switch (next) {
+    'driver_arriving' => AppTheme.primary,
+    'in_progress'     => AppTheme.secondary,
+    'completed'       => AppTheme.danger,
+    _                 => AppTheme.gray,
+  };
+
+  IconData _slideIcon(String next) => switch (next) {
+    'driver_arriving' => Icons.directions_car,
+    'in_progress'     => Icons.person,
+    'completed'       => Icons.flag,
+    _                 => Icons.arrow_forward,
   };
 
   String _statusLabel(String s) => switch (s) {
@@ -312,7 +363,7 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
     'driver_arriving'   => Colors.orange,
     'in_progress'       => AppTheme.secondary,
     'completed'         => Colors.green,
-    'payment_confirmed' => Colors.green.shade700,
+    'payment_confirmed' => Colors.green,
     'cancelled'         => AppTheme.danger,
     _                   => AppTheme.gray,
   };
@@ -324,6 +375,51 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
     'wallet' => 'Carteira',
     _        => m,
   };
+
+  // Labels do slide por próximo status
+  String _nextLabel(String next) => switch (next) {
+    'driver_arriving' => 'A caminho',
+    'in_progress'     => 'Passageiro embarcou',
+    _                 => next,
+  };
+
+  Color _nextColor(String next) => switch (next) {
+    'driver_arriving' => AppTheme.primary,
+    'in_progress'     => AppTheme.secondary,
+    _                 => AppTheme.gray,
+  };
+
+  IconData _nextIcon(String next) => switch (next) {
+    'driver_arriving' => Icons.directions_car,
+    'in_progress'     => Icons.person,
+    _                 => Icons.arrow_forward,
+  };
+
+  // Dialog de confirmação de cancelamento
+  void _showCancelDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Cancelar corrida?'),
+        content: const Text(
+          'Tem certeza que deseja cancelar esta corrida?\n'
+          'O passageiro será notificado.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Não, continuar')),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _updateStatus('cancelled');
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: AppTheme.danger),
+            child: const Text('Sim, cancelar')),
+        ],
+      ),
+    );
+  }
 
   // ── Build ─────────────────────────────────────────────────────
 
@@ -340,7 +436,7 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
     return Scaffold(
       body: Stack(children: [
 
-        // ── Mapa ───────────────────────────────────────────────
+        // ── Mapa ─────────────────────────────────────────────
         GoogleMap(
           initialCameraPosition: CameraPosition(
             target: _originLatLng ?? const LatLng(-15.78, -47.93),
@@ -351,13 +447,19 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
           myLocationEnabled:       true,
           myLocationButtonEnabled: false,
           zoomControlsEnabled:     false,
+          // FIX: onMapCreated NÃO chama _buildMap diretamente
+          // Apenas salva o controller e agenda o build após o frame
           onMapCreated: (c) {
             _mapController = c;
-            _buildMap();
+            _mapReady      = true;
+            // Aguarda o frame completar antes de animar a câmera
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _buildMap();
+            });
           },
         ),
 
-        // ── Header ─────────────────────────────────────────────
+        // ── Header ───────────────────────────────────────────
         SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(
@@ -367,7 +469,6 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
               children: [
                 Row(children: [
 
-                  // Badge de status
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 14, vertical: 9),
@@ -375,7 +476,7 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       boxShadow: [BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.1),
+                        color:      Colors.black.withValues(alpha: 0.1),
                         blurRadius: 8)],
                     ),
                     child: Row(children: [
@@ -389,13 +490,21 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
                       Text(_statusLabel(_status),
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
-                          color: _statusColor(_status))),
+                          color:      _statusColor(_status))),
+                      if (_ws.isConnected) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          width: 6, height: 6,
+                          decoration: const BoxDecoration(
+                            color: AppTheme.secondary,
+                            shape: BoxShape.circle),
+                        ),
+                      ],
                     ]),
                   ),
 
                   const Spacer(),
 
-                  // Botão chat
                   if (_canChat)
                     StreamBuilder<int>(
                       stream: _chat.unreadCountStream(
@@ -412,7 +521,6 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
                     ),
                 ]),
 
-                // ── Banner back-to-back ───────────────────────
                 if (_nextRide != null && _status == 'in_progress') ...[
                   const SizedBox(height: 10),
                   GestureDetector(
@@ -424,24 +532,24 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
                         color: AppTheme.secondary,
                         borderRadius: BorderRadius.circular(12),
                         boxShadow: [BoxShadow(
-                          color: AppTheme.secondary.withValues(alpha: 0.4),
+                          color:      AppTheme.secondary.withValues(alpha: 0.4),
                           blurRadius: 8,
-                          offset: const Offset(0, 2))],
+                          offset:     const Offset(0, 2))],
                       ),
-                      child: Row(children: [
-                        const Icon(Icons.electric_bolt,
+                      child: const Row(children: [
+                        Icon(Icons.electric_bolt,
                           color: Colors.white, size: 18),
-                        const SizedBox(width: 8),
-                        const Expanded(
+                        SizedBox(width: 8),
+                        Expanded(
                           child: Text(
                             'Nova corrida disponível! Toque para ver.',
                             style: TextStyle(
-                              color: Colors.white,
+                              color:      Colors.white,
                               fontWeight: FontWeight.w600,
-                              fontSize: 13),
+                              fontSize:   13),
                           ),
                         ),
-                        const Icon(Icons.chevron_right,
+                        Icon(Icons.chevron_right,
                           color: Colors.white, size: 18),
                       ]),
                     ),
@@ -452,7 +560,7 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
           ),
         ),
 
-        // ── Painel inferior ────────────────────────────────────
+        // ── Painel inferior ───────────────────────────────────
         Positioned(
           bottom: 0, left: 0, right: 0,
           child: Container(
@@ -488,39 +596,46 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
 
                 const SizedBox(height: 16),
 
-                if (_status == 'completed') ...[
-                  RidePaymentConfirmCard(
-                    payMethod: payMethod,
-                    price:     _ride?.price ?? 0.0,
-                    onConfirm: () => _updateStatus('payment_confirmed'),
-                    busy:      _actionBusy,
-                  ),
+                if (_status == 'cancelled') ...[
+                  RideCancelledCard(onDone: () => context.go('/home')),
+
                 ] else if (_status == 'payment_confirmed') ...[
                   RideSuccessCard(onDone: () => context.go('/home')),
-                ] else if (_status == 'cancelled') ...[
-                  RideCancelledCard(onDone: () => context.go('/home')),
+
+                // ── completed: só confirmar recebimento ──────────
+                ] else if (_status == 'completed') ...[
+                  RideSlider(
+                    key:          const ValueKey('completed'),
+                    confirmLabel: 'Confirmar recebimento',
+                    confirmColor: Colors.green.shade600,
+                    thumbIcon:    Icons.payments_outlined,
+                    busy:         _actionBusy,
+                    onConfirm:    () => _updateStatus('payment_confirmed'),
+                  ),
+
+                // ── in_progress: só finalizar ────────────────────
+                ] else if (_status == 'in_progress') ...[
+                  RideSlider(
+                    key:          const ValueKey('in_progress'),
+                    confirmLabel: 'Finalizar corrida',
+                    confirmColor: AppTheme.danger,
+                    thumbIcon:    Icons.flag,
+                    busy:         _actionBusy,
+                    onConfirm:    () => _updateStatus('completed'),
+                  ),
+
+                // ── accepted / driver_arriving: pode cancelar ────
                 ] else if (next != null) ...[
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: _actionBusy
-                        ? null
-                        : () => _updateStatus(next),
-                      icon: _actionBusy
-                        ? const SizedBox(
-                            width: 18, height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
-                        : Icon(_nextIcon(next), size: 20),
-                      label: Text(_nextLabel(next),
-                        style: const TextStyle(fontSize: 16)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _nextColor(next),
-                        minimumSize: const Size(0, 54),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14)),
-                      ),
-                    ),
+                  RideSlider(
+                    key:          ValueKey(next),
+                    confirmLabel: _nextLabel(next),
+                    rejectLabel:  'Cancelar',
+                    confirmColor: _nextColor(next),
+                    rejectColor:  AppTheme.danger,
+                    thumbIcon:    _nextIcon(next),
+                    busy:         _actionBusy,
+                    onConfirm:    () => _updateStatus(next),
+                    onReject:     _showCancelDialog,
                   ),
                 ],
               ],

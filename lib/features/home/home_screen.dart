@@ -8,6 +8,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/models/user_model.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/home_service.dart';
+import '../../core/services/websocket_service.dart';
 import 'widgets/home_bottom_panel.dart';
 import 'widgets/home_heat_chip.dart';
 import 'widgets/home_ride_request_sheet.dart';
@@ -21,44 +22,41 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final _homeService = HomeService();
+  final _ws          = WebSocketService();
 
-  GoogleMapController? _mapController;
-  Position?            _currentPosition;
-  UserModel?           _user;
-  Map<String, dynamic>? _driverInfo;
-  Map<String, dynamic>? _walletInfo;
+  GoogleMapController?   _mapController;
+  Position?              _currentPosition;
+  UserModel?             _user;
+  Map<String, dynamic>?  _driverInfo;
+  Map<String, dynamic>?  _walletInfo;
 
   bool _isOnline      = false;
   bool _loading       = true;
   bool _needsVehicle  = false;
   bool _needsApproval = false;
 
-  // ── Corrida pendente ──────────────────────────────────────────
   bool                  _hasNewRide  = false;
   Map<String, dynamic>? _pendingRide;
 
-  // ── Heatmap ───────────────────────────────────────────────────
-  bool      _heatmapActive = false;
-  bool      _heatLoading   = false;
-  bool      _showHeat      = true;
-  bool      _showSearching = true;
-  bool      _showDrivers   = true;
-  DateTime? _heatLastUpdate;
-  Set<Circle> _circles = {};
+  bool        _heatmapActive = false;
+  bool        _heatLoading   = false;
+  bool        _showHeat      = true;
+  bool        _showSearching = true;
+  bool        _showDrivers   = true;
+  DateTime?   _heatLastUpdate;
+  Set<Circle> _circles       = {};
   List<Map<String, dynamic>> _heatPoints    = [];
   List<Map<String, dynamic>> _searchingNow  = [];
   List<Map<String, dynamic>> _onlineDrivers = [];
 
-  // ── Layer de corridas no mapa ─────────────────────────────────
   bool        _ridesLayerActive  = false;
   bool        _ridesLayerLoading = false;
   Set<Marker> _rideMarkers       = {};
   List<Map<String, dynamic>> _mapRides = [];
 
-  // ── Timers / streams ──────────────────────────────────────────
-  Timer?            _userTimer;    // dados do usuário — a cada 60s
-  Timer?            _rideTimer;    // check corridas — a cada 8s
-  StreamSubscription<Position>? _positionSub; // localização contínua
+  Timer?                        _userTimer;
+  Timer?                        _fallbackTimer;
+  StreamSubscription<Position>? _positionSub;
 
   @override
   void initState() {
@@ -66,20 +64,23 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadUser();
     _initLocation();
     _startUserPolling();
-    _startRidePolling();
   }
 
   @override
   void dispose() {
     _userTimer?.cancel();
-    _rideTimer?.cancel();
+    _fallbackTimer?.cancel();
     _positionSub?.cancel();
     _mapController?.dispose();
+    _ws.off('ride.requested');
+    _ws.disconnect();
     super.dispose();
   }
 
-  // ── MELHORIA 5: Polling separado ─────────────────────────────
-  // Dados do usuário (rating, saldo, status) — menos urgente → 60s
+  // ─────────────────────────────────────────────────────────────
+  // Polling usuário — 60s
+  // ─────────────────────────────────────────────────────────────
+
   void _startUserPolling() {
     _userTimer = Timer.periodic(const Duration(seconds: 60), (_) async {
       if (!mounted) return;
@@ -87,15 +88,93 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  // Check de corridas pendentes — urgente → 8s, só quando online
-  void _startRidePolling() {
-    _rideTimer = Timer.periodic(const Duration(seconds: 8), (_) async {
-      if (!mounted) return;
-      if (_isOnline) await _checkForRides();
+  // ─────────────────────────────────────────────────────────────
+  // WebSocket — canal público 'rides'
+  //
+  // FLUXO ao receber ride.requested:
+  //   1. WS entrega ride_id imediatamente
+  //   2. Flutter chama GET /driver/rides/pending → dados completos (com fee)
+  //   3. Exibe sheet com todos os valores corretos
+  // ─────────────────────────────────────────────────────────────
+
+  Future<void> _startWsRideListener() async {
+    _ws.off('ride.requested');
+    await _ws.connect();
+    await _ws.subscribeToPublic('rides');
+
+    _ws.on('ride.requested', (payload) async {
+      if (!mounted || !_isOnline || _hasNewRide) return;
+
+      // Busca a corrida completa via API para ter fee_type, fee_value,
+      // distance_km e duration_minutes — o payload WS não os contém
+      await _fetchAndShowRide(
+        rideId: payload['ride_id']?.toString() ?? payload['id']?.toString(),
+        fallbackPayload: payload,
+      );
+    });
+
+    // Fallback poll — 30s — garante que corridas não são perdidas
+    _fallbackTimer?.cancel();
+    _fallbackTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      if (!mounted || !_isOnline || _hasNewRide) return;
+      await _fetchAndShowRide();
     });
   }
 
-  // ── MELHORIA 6: Localização contínua com positionStream ──────
+  void _stopWsRideListener() {
+    _ws.off('ride.requested');
+    _fallbackTimer?.cancel();
+  }
+
+  // Busca corrida completa via API e exibe o sheet
+  // Se rideId não fornecido → busca qualquer pendente (modo fallback)
+  Future<void> _fetchAndShowRide({
+    String? rideId,
+    Map<String, dynamic>? fallbackPayload,
+  }) async {
+    try {
+      final rides = await _homeService.getPendingRides();
+      if (rides.isEmpty || !mounted || _hasNewRide) return;
+
+      // Prefere a corrida do evento WS; se não existir mais, pega a primeira
+      Map<String, dynamic> rideData;
+      if (rideId != null) {
+        rideData = rides.firstWhere(
+          (r) => r['id']?.toString() == rideId,
+          orElse: () => rides.first,
+        );
+      } else {
+        rideData = rides.first;
+      }
+
+      setState(() { _hasNewRide = true; _pendingRide = rideData; });
+      await _notifyNewRide();
+      if (mounted) _showRideRequest();
+    } catch (_) {
+      // WS chegou mas API falhou — usa payload parcial como fallback visual
+      if (fallbackPayload != null && mounted && !_hasNewRide) {
+        final partial = {
+          'id':                  fallbackPayload['ride_id'] ?? '',
+          'estimated_price':     fallbackPayload['estimated_price'] ?? 0.0,
+          'distance_km':         fallbackPayload['distance_km'],
+          'duration_minutes':    fallbackPayload['duration_minutes'],
+          'origin_address':      fallbackPayload['origin_address'],
+          'destination_address': fallbackPayload['destination_address'],
+          'payment_method':      fallbackPayload['payment_method'],
+          'fee_type':            'fixed',
+          'fee_value':           0.0,
+        };
+        setState(() { _hasNewRide = true; _pendingRide = partial; });
+        await _notifyNewRide();
+        if (mounted) _showRideRequest();
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Localização
+  // ─────────────────────────────────────────────────────────────
+
   Future<void> _initLocation() async {
     try {
       LocationPermission permission = await Geolocator.checkPermission();
@@ -104,19 +183,14 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       if (permission == LocationPermission.deniedForever) return;
 
-      // Pega posição inicial uma vez
       final initial = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
-      );
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
       _onPositionUpdate(initial);
 
-      // Inicia stream contínuo — atualiza a cada 10 metros ou 5 segundos
       _positionSub = Geolocator.getPositionStream(
         locationSettings: const LocationSettings(
-          accuracy:          LocationAccuracy.high,
-          distanceFilter:    10,   // metros mínimos para disparar update
+          accuracy:       LocationAccuracy.high,
+          distanceFilter: 10,
         ),
       ).listen(_onPositionUpdate);
     } catch (_) {}
@@ -127,13 +201,12 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _currentPosition = position);
     _mapController?.animateCamera(CameraUpdate.newLatLngZoom(
       LatLng(position.latitude, position.longitude), 15));
-    // Envia localização para o servidor apenas quando online
-    if (_isOnline) {
-      _homeService.updateLocation(position);
-    }
+    if (_isOnline) _homeService.updateLocation(position);
   }
 
-  // ── Carregamento de dados do motorista ────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // Dados do motorista
+  // ─────────────────────────────────────────────────────────────
 
   Future<void> _loadUser() async {
     try {
@@ -149,61 +222,53 @@ class _HomeScreenState extends State<HomeScreen> {
         _loading       = false;
       });
 
+      if (_isOnline) await _startWsRideListener();
+
       final activeRideId = await _homeService.checkActiveRide();
-if (activeRideId != null && mounted) {
-  context.go('/ride-detail/$activeRideId');
-  return;
-}
+      if (activeRideId != null && mounted) {
+        context.go('/ride-detail/$activeRideId');
+        return;
+      }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  // ── Toggle online ─────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // Toggle online
+  // ─────────────────────────────────────────────────────────────
 
   Future<void> _toggleOnline() async {
     if (!_isOnline) {
       if (_needsVehicle) {
-        _showSnack('Adicione seu veículo antes de ficar online.',
-          AppTheme.warning);
+        _showSnack('Adicione seu veículo antes de ficar online.', AppTheme.warning);
         return;
       }
       if (_needsApproval) {
-        _showSnack('Aguarde a aprovação do seu cadastro.',
-          AppTheme.warning);
+        _showSnack('Aguarde a aprovação do seu cadastro.', AppTheme.warning);
         return;
       }
     }
     try {
       await _homeService.setOnlineStatus(!_isOnline);
       setState(() => _isOnline = !_isOnline);
-      // Envia localização imediatamente ao ficar online
-      if (_isOnline && _currentPosition != null) {
-        await _homeService.updateLocation(_currentPosition!);
+      if (_isOnline) {
+        if (_currentPosition != null) {
+          await _homeService.updateLocation(_currentPosition!);
+        }
+        await _startWsRideListener();
+      } else {
+        _stopWsRideListener();
       }
     } catch (_) {}
   }
 
-  // ── Check de corridas pendentes ───────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // Sheet de corrida
+  // ─────────────────────────────────────────────────────────────
 
-  Future<void> _checkForRides() async {
-    try {
-      final rides = await _homeService.getPendingRides();
-      if (rides.isNotEmpty && !_hasNewRide && mounted) {
-        setState(() {
-          _hasNewRide  = true;
-          _pendingRide = rides.first;
-        });
-        await _notifyNewRide(); // MELHORIA 7
-        if (mounted) _showRideRequest();
-      }
-    } catch (_) {}
-  }
-
-  // ── MELHORIA 7: Feedback sonoro e vibração ────────────────────
   Future<void> _notifyNewRide() async {
     try {
-      // Vibração: padrão curto-longo-curto (estilo notificação)
       await HapticFeedback.heavyImpact();
       await Future.delayed(const Duration(milliseconds: 150));
       await HapticFeedback.heavyImpact();
@@ -211,42 +276,46 @@ if (activeRideId != null && mounted) {
       await HapticFeedback.heavyImpact();
     } catch (_) {}
   }
-
-  // ── Corridas ──────────────────────────────────────────────────
 
   void _showRideRequest() {
     if (_pendingRide == null) return;
     showModalBottomSheet(
-      context: context,
+      context:       context,
       isDismissible: false,
       enableDrag:    false,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => HomeRideRequestSheet(
-        ride: _pendingRide!,
-        onAccept: () async {
-          Navigator.pop(context);
-          await _acceptRide(_pendingRide!['id']);
-          setState(() { _hasNewRide = false; _pendingRide = null; });
+        ride:           _pendingRide!,
+        timeoutSeconds: 20,
+        onAccept: () {
+          final rideId = _pendingRide!['id']?.toString() ?? '';
+          _acceptRide(rideId);
         },
         onReject: () async {
-          final rideId = _pendingRide!['id'];
-          try { await _homeService.rejectRide(rideId); } catch (_) {}
-          if (mounted) Navigator.pop(context);
-          setState(() { _hasNewRide = false; _pendingRide = null; });
+          final rideId = _pendingRide?['id']?.toString();
+          if (rideId != null && rideId.isNotEmpty) {
+            try { await _homeService.rejectRide(rideId); } catch (_) {}
+          }
         },
       ),
-    );
+    ).whenComplete(() {
+      if (mounted) setState(() { _hasNewRide = false; _pendingRide = null; });
+    });
   }
 
   Future<void> _acceptRide(String rideId) async {
     try {
       await _homeService.acceptRide(rideId);
       if (mounted) context.go('/ride-detail/$rideId');
-    } catch (_) {}
+    } catch (_) {
+      if (mounted) _showSnack('Erro ao aceitar corrida.', AppTheme.danger);
+    }
   }
 
-  // ── Heatmap ───────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // Heatmap
+  // ─────────────────────────────────────────────────────────────
 
   Future<void> _toggleHeatmap() async {
     if (_heatmapActive) {
@@ -279,10 +348,8 @@ if (activeRideId != null && mounted) {
         final weight = (p['weight'] as num?)?.toDouble() ?? 0.5;
         circles.add(Circle(
           circleId: CircleId('heat_$i'),
-          center: LatLng(
-            (p['lat'] as num).toDouble(),
-            (p['lng'] as num).toDouble()),
-          radius: 180,
+          center:   LatLng((p['lat'] as num).toDouble(), (p['lng'] as num).toDouble()),
+          radius:   180,
           fillColor: Color.lerp(
             Colors.orange.withValues(alpha: 0.15),
             Colors.red.withValues(alpha: 0.45),
@@ -295,20 +362,18 @@ if (activeRideId != null && mounted) {
 
     if (_showSearching) {
       for (final p in _searchingNow) {
-        final ll = LatLng(
-          (p['lat'] as num).toDouble(),
-          (p['lng'] as num).toDouble());
+        final ll = LatLng((p['lat'] as num).toDouble(), (p['lng'] as num).toDouble());
         circles.add(Circle(
-          circleId: CircleId('s_outer_$i'),
-          center: ll, radius: 300,
+          circleId:    CircleId('s_outer_$i'),
+          center:      ll, radius: 300,
           fillColor:   Colors.green.withValues(alpha: 0.12),
           strokeColor: Colors.green.withValues(alpha: 0.3),
           strokeWidth: 1,
         ));
         circles.add(Circle(
-          circleId: CircleId('s_inner_$i'),
-          center: ll, radius: 100,
-          fillColor: Colors.green.withValues(alpha: 0.5),
+          circleId:    CircleId('s_inner_$i'),
+          center:      ll, radius: 100,
+          fillColor:   Colors.green.withValues(alpha: 0.5),
           strokeWidth: 0,
         ));
         i++;
@@ -318,11 +383,9 @@ if (activeRideId != null && mounted) {
     if (_showDrivers) {
       for (final p in _onlineDrivers) {
         circles.add(Circle(
-          circleId: CircleId('driver_$i'),
-          center: LatLng(
-            (p['lat'] as num).toDouble(),
-            (p['lng'] as num).toDouble()),
-          radius: 80,
+          circleId:    CircleId('driver_$i'),
+          center:      LatLng((p['lat'] as num).toDouble(), (p['lng'] as num).toDouble()),
+          radius:      80,
           fillColor:   Colors.blue.withValues(alpha: 0.35),
           strokeColor: Colors.blue.withValues(alpha: 0.6),
           strokeWidth: 1,
@@ -343,15 +406,9 @@ if (activeRideId != null && mounted) {
     });
   }
 
-  // ── Layer de corridas no mapa ─────────────────────────────────
-
   Future<void> _toggleRidesLayer() async {
     if (_ridesLayerActive) {
-      setState(() {
-        _ridesLayerActive = false;
-        _rideMarkers      = {};
-        _mapRides         = [];
-      });
+      setState(() { _ridesLayerActive = false; _rideMarkers = {}; _mapRides = []; });
       return;
     }
     setState(() => _ridesLayerLoading = true);
@@ -376,8 +433,7 @@ if (activeRideId != null && mounted) {
       markers.add(Marker(
         markerId: MarkerId('ride_${ride['id']}'),
         position: LatLng(lat, lng),
-        icon: BitmapDescriptor.defaultMarkerWithHue(
-          BitmapDescriptor.hueGreen),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
         onTap: () => _showMapRideSheet(ride),
       ));
     }
@@ -394,46 +450,54 @@ if (activeRideId != null && mounted) {
   }
 
   void _showMapRideSheet(Map<String, dynamic> ride) {
+    final rideId = ride['id'].toString();
+
     showModalBottomSheet(
-      context: context,
+      context:       context,
       isDismissible: true,
       enableDrag:    true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => HomeRideRequestSheet(
         ride: ride,
-        onAccept: () async {
-          Navigator.pop(context);
-          await _acceptRide(ride['id']);
+        // O sheet fecha sozinho antes de chamar estes callbacks.
+        // NÃO chamar Navigator.pop aqui — causaria double-pop e crash.
+        onAccept: () {
+          _acceptRide(rideId);
         },
         onReject: () async {
-          final rideId = ride['id'];
           try { await _homeService.rejectRide(rideId); } catch (_) {}
-          if (mounted) Navigator.pop(context);
-          setState(() {
-            _mapRides.removeWhere((r) => r['id'] == rideId);
-            _rideMarkers.removeWhere(
-              (m) => m.markerId.value == 'ride_$rideId');
-          });
         },
       ),
-    );
+    ).whenComplete(() {
+      // Executado sempre que o sheet fechar (aceitar, recusar, timeout, drag)
+      if (mounted) setState(() {
+        _mapRides.removeWhere((r) => r['id'].toString() == rideId);
+        _rideMarkers.removeWhere(
+          (m) => m.markerId.value == 'ride_$rideId');
+      });
+    });
   }
 
-  // ── Helpers ───────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // Helpers
+  // ─────────────────────────────────────────────────────────────
 
   void _showSnack(String msg, Color color) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), backgroundColor: color));
   }
 
   String get _balanceLabel {
     final b = double.tryParse(
-      _walletInfo?['balance']?.toString() ?? '0') ?? 0.0;
+        _walletInfo?['balance']?.toString() ?? '0') ?? 0.0;
     return 'R\$ ${b.toStringAsFixed(2)}';
   }
 
-  // ── Build ─────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // Build
+  // ─────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -442,12 +506,10 @@ if (activeRideId != null && mounted) {
         ? const Center(child: CircularProgressIndicator())
         : Stack(children: [
 
-            // ── Mapa ─────────────────────────────────────────
             GoogleMap(
               initialCameraPosition: CameraPosition(
                 target: _currentPosition != null
-                  ? LatLng(_currentPosition!.latitude,
-                           _currentPosition!.longitude)
+                  ? LatLng(_currentPosition!.latitude, _currentPosition!.longitude)
                   : const LatLng(-15.7801, -47.9292),
                 zoom: 15,
               ),
@@ -456,17 +518,9 @@ if (activeRideId != null && mounted) {
               zoomControlsEnabled:     false,
               circles:  _circles,
               markers:  _rideMarkers,
-              onMapCreated: (c) {
-                _mapController = c;
-                if (_currentPosition != null) {
-                  c.animateCamera(CameraUpdate.newLatLngZoom(
-                    LatLng(_currentPosition!.latitude,
-                           _currentPosition!.longitude), 15));
-                }
-              },
+              onMapCreated: (c) => _mapController = c,
             ),
 
-            // ── Header ───────────────────────────────────────
             SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -475,7 +529,6 @@ if (activeRideId != null && mounted) {
                   children: [
                     Row(children: [
 
-                      // Avatar + nome
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 10),
@@ -494,20 +547,20 @@ if (activeRideId != null && mounted) {
                             child: Text(
                               (_user?.name ?? 'M')[0].toUpperCase(),
                               style: const TextStyle(
-                                color: AppTheme.secondary,
+                                color:      AppTheme.secondary,
                                 fontWeight: FontWeight.bold)),
                           ),
                           const SizedBox(width: 8),
                           Text(
                             _user?.name?.split(' ').first ?? 'Motorista',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600)),
+                            style: const TextStyle(fontWeight: FontWeight.w600)),
                         ]),
                       ),
 
                       const Spacer(),
 
-                      // Botão corridas no mapa
+                      
+
                       _MapBtn(
                         active:      _ridesLayerActive,
                         loading:     _ridesLayerLoading,
@@ -519,7 +572,6 @@ if (activeRideId != null && mounted) {
                       ),
                       const SizedBox(width: 8),
 
-                      // Botão heatmap
                       _MapBtn(
                         active:      _heatmapActive,
                         loading:     _heatLoading,
@@ -530,7 +582,6 @@ if (activeRideId != null && mounted) {
                       ),
                       const SizedBox(width: 8),
 
-                      // Perfil
                       _IconBtn(
                         icon:  Icons.person_outline,
                         color: AppTheme.dark,
@@ -538,19 +589,9 @@ if (activeRideId != null && mounted) {
                       ),
                       const SizedBox(width: 8),
 
-                      // Logout
-                      _IconBtn(
-                        icon:  Icons.logout,
-                        color: AppTheme.danger,
-                        onTap: () async {
-                          final router = GoRouter.of(context);
-                          await AuthService().logout();
-                          router.go('/login');
-                        },
-                      ),
+                     
                     ]),
 
-                    // Filtros heatmap
                     if (_heatmapActive) ...[
                       const SizedBox(height: 10),
                       SingleChildScrollView(
@@ -571,8 +612,7 @@ if (activeRideId != null && mounted) {
                             color:  Colors.green,
                             active: _showSearching,
                             onTap:  () {
-                              setState(() =>
-                                _showSearching = !_showSearching);
+                              setState(() => _showSearching = !_showSearching);
                               _buildCircles();
                             },
                           ),
@@ -617,7 +657,6 @@ if (activeRideId != null && mounted) {
               ),
             ),
 
-            // ── Painel inferior ───────────────────────────────
             Positioned(
               bottom: 0, left: 0, right: 0,
               child: HomeBottomPanel(
@@ -634,7 +673,9 @@ if (activeRideId != null && mounted) {
   }
 }
 
-// ── Botão do mapa com badge e loading ────────────────────────────
+// ─────────────────────────────────────────────────────────────────
+// Widgets locais
+// ─────────────────────────────────────────────────────────────────
 
 class _MapBtn extends StatelessWidget {
   final bool active;
@@ -683,15 +724,14 @@ class _MapBtn extends StatelessWidget {
                     child: Container(
                       width: 16, height: 16,
                       decoration: BoxDecoration(
-                        color: Colors.red,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: Colors.white, width: 1.5)),
+                        color:  Colors.red,
+                        shape:  BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 1.5)),
                       child: Center(
                         child: Text('$badge',
                           style: const TextStyle(
-                            fontSize: 9,
-                            color: Colors.white,
+                            fontSize:   9,
+                            color:      Colors.white,
                             fontWeight: FontWeight.bold)),
                       ),
                     ),
@@ -702,8 +742,6 @@ class _MapBtn extends StatelessWidget {
     );
   }
 }
-
-// ── Botão ícone simples ───────────────────────────────────────────
 
 class _IconBtn extends StatelessWidget {
   final IconData icon;

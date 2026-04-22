@@ -9,16 +9,19 @@ class WalletService {
 
   final _api = ApiClient();
 
+  Future<Map<String, dynamic>> getMe() async {
+    final res = await _api.dio.get('/auth/me');
+    return res.data['user'] as Map<String, dynamic>;
+  }
+
   // ── Carregar carteira + extrato ───────────────────────────────
 
   Future<Map<String, dynamic>> loadWallet() async {
     final walletRes = await _api.dio.get(ApiConstants.walletBalance);
     final transRes  = await _api.dio.get(ApiConstants.walletTransactions);
 
-    // balance retorna direto (não aninhado em 'wallet')
     final wallet = WalletModel.fromJson(walletRes.data);
 
-    // transactions retorna estrutura paginate() do Laravel
     final transactions = (transRes.data['data'] as List? ?? [])
         .map((t) => WalletTransaction.fromJson(t))
         .toList();
@@ -26,21 +29,45 @@ class WalletService {
     return {'wallet': wallet, 'transactions': transactions};
   }
 
-  // ── Gerar depósito PIX ────────────────────────────────────────
-  // Endpoint: POST /wallet/deposit
-  // Backend valida: amount min:10, max:5000
-  // Retorna: { transaction_id, amount, pix_code }
-  // Nota: não há pix_image (QR code base64) — apenas pix_code texto
+  // ── Gerar depósito PIX via Mercado Pago ──────────────────────
+  //
+  // POST /wallet/deposit
+  // Retorna:
+  //   payment_id     → ID do pagamento no MP
+  //   transaction_id → UUID da WalletTransaction (para polling de confirm)
+  //   pix_code       → string copia-e-cola
+  //   pix_image      → base64 do QR code (pode ser null)
+  //   amount         → valor solicitado
+  //   expires_at     → data/hora de expiração
 
   Future<Map<String, dynamic>> createDeposit(double amount) async {
     final res = await _api.dio.post(
       ApiConstants.walletDeposit,
       data: {'amount': amount},
     );
+
+    final data = res.data as Map<String, dynamic>;
+
     return {
-      'transaction_id': res.data['transaction_id'],
-      'pix_code':       res.data['pix_code'],
-      'amount':         res.data['amount'],
+      'payment_id':     data['payment_id'],
+      'transaction_id': data['transaction_id'],
+      'pix_code':       data['pix_code'],
+      'pix_image':      data['pix_image'],   // base64 QR, pode ser null
+      'amount':         data['amount'],
+      'expires_at':     data['expires_at'],
     };
+  }
+
+  // ── Confirmar depósito manualmente (botão "Já paguei") ────────
+  // POST /wallet/deposit/confirm
+  // Usado como fallback caso o webhook MP não chegue a tempo.
+  // Retorna 200 se confirmado, 422 se ainda pendente.
+
+  Future<Map<String, dynamic>> confirmDeposit(String transactionId) async {
+    final res = await _api.dio.post(
+      ApiConstants.walletDepositConfirm,
+      data: {'transaction_id': transactionId},
+    );
+    return res.data as Map<String, dynamic>;
   }
 }
