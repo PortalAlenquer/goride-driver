@@ -246,7 +246,7 @@ class _WalletScreenState extends State<WalletScreen> {
         title: const Text('Minha carteira'),
         leading: IconButton(
           icon:      const Icon(Icons.arrow_back),
-          onPressed: () => context.go('/profile'),
+          onPressed: () => context.push('/profile'),
         ),
       ),
       body: _loading
@@ -337,7 +337,7 @@ class _WalletScreenState extends State<WalletScreen> {
                                     TextButton(
                                       onPressed: () {
                                         Navigator.pop(context);
-                                        context.go('/profile');
+                                        context.push('/profile');
                                       },
                                       child: const Text('Ir para o perfil'),
                                     ),

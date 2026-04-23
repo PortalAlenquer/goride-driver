@@ -36,7 +36,7 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
             backgroundColor: AppTheme.secondary,
           ),
         );
-        context.go('/profile');
+        context.push('/profile');
       }
     } catch (_) {
       if (mounted) {
@@ -60,7 +60,7 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
         title: const Text('Alterar senha'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.go('/profile'),
+          onPressed: () => context.push('/profile'),
         ),
       ),
       body: SingleChildScrollView(

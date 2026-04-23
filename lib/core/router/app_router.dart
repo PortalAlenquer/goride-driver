@@ -11,6 +11,7 @@ import '../../features/profile/change_password_screen.dart';
 import '../../features/profile/payment_methods_screen.dart';
 import '../../features/profile/complete_profile_screen.dart';
 import '../../features/profile/support_screen.dart';
+import '../../features/profile/earnings_screen.dart';
 
 
 class AppRouter {
@@ -27,6 +28,7 @@ class AppRouter {
       GoRoute(path: '/change-password',  builder: (context, _) => const ChangePasswordScreen()),
       GoRoute(path: '/payment-methods',  builder: (context, _) => const PaymentMethodsScreen()),
       GoRoute(path: '/complete-profile', builder: (context, _) => const CompleteProfileScreen()),
+      GoRoute(path: '/earnings',         builder: (context, __) => const EarningsScreen()),
       GoRoute(
         path: '/ride-detail/:id',
         builder: (_, state) => RideDetailScreen(

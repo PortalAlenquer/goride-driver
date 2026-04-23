@@ -68,7 +68,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
             content: Text('Formas de pagamento atualizadas!'),
             backgroundColor: AppTheme.secondary,
           ));
-        context.go('/profile');
+        context.push('/profile');
       }
     } catch (_) {
       if (mounted) {
@@ -91,7 +91,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
         title: const Text('Formas de pagamento'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.go('/profile'),
+          onPressed: () => context.push('/profile'),
         ),
       ),
       body: _loading

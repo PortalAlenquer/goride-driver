@@ -274,7 +274,7 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
 
       // Navega para home — não faz mais nada após isso
       if (status == 'payment_confirmed' || status == 'cancelled') {
-        if (mounted) context.go('/home');
+        if (mounted) context.push('/home');
         return;
       }
 
@@ -597,10 +597,10 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
                 const SizedBox(height: 16),
 
                 if (_status == 'cancelled') ...[
-                  RideCancelledCard(onDone: () => context.go('/home')),
+                  RideCancelledCard(onDone: () => context.push('/home')),
 
                 ] else if (_status == 'payment_confirmed') ...[
-                  RideSuccessCard(onDone: () => context.go('/home')),
+                  RideSuccessCard(onDone: () => context.push('/home')),
 
                 // ── completed: só confirmar recebimento ──────────
                 ] else if (_status == 'completed') ...[

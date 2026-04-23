@@ -40,7 +40,7 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
-      if (mounted) context.go('/home');
+      if (mounted) context.push('/home');
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -116,7 +116,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 16),
                 Center(
                   child: TextButton(
-                    onPressed: () => context.go('/register'),
+                    onPressed: () => context.push('/register'),
                     child: const Text.rich(TextSpan(children: [
                       TextSpan(text: 'Novo motorista? ',
                         style: TextStyle(color: AppTheme.gray)),

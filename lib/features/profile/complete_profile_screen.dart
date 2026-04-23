@@ -258,7 +258,7 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
       if (mounted) {
         _showSnack('Documentação enviada! Aguarde aprovação.',
             isError: false);
-        context.go('/home');
+        context.push('/home');
       }
     } on DioException catch (e) {
       _showSnack(
@@ -358,7 +358,7 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
               onPressed: () => setState(() => _step--))
           : IconButton(
               icon:      const Icon(Icons.arrow_back),
-              onPressed: () => context.go('/home')),
+              onPressed: () => context.push('/home')),
       ),
       body: stillLoading
         ? const Center(child: CircularProgressIndicator())

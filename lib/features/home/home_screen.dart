@@ -226,7 +226,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final activeRideId = await _homeService.checkActiveRide();
       if (activeRideId != null && mounted) {
-        context.go('/ride-detail/$activeRideId');
+        context.push('/ride-detail/$activeRideId');
         return;
       }
     } catch (_) {
@@ -307,7 +307,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _acceptRide(String rideId) async {
     try {
       await _homeService.acceptRide(rideId);
-      if (mounted) context.go('/ride-detail/$rideId');
+      if (mounted) context.push('/ride-detail/$rideId');
     } catch (_) {
       if (mounted) _showSnack('Erro ao aceitar corrida.', AppTheme.danger);
     }
@@ -501,7 +501,32 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final shouldExit = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title:   const Text('Sair do app?'),
+            content: const Text('Deseja realmente fechar o aplicativo?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Não')),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppTheme.danger),
+                child: const Text('Sim, sair')),
+            ],
+          ),
+        );
+        if ((shouldExit ?? false) && context.mounted) {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
       body: _loading
         ? const Center(child: CircularProgressIndicator())
         : Stack(children: [
@@ -529,37 +554,53 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Row(children: [
 
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.1),
-                            blurRadius: 8)],
-                        ),
-                        child: Row(children: [
-                          CircleAvatar(
-                            radius: 16,
-                            backgroundColor:
-                              AppTheme.secondary.withValues(alpha: 0.1),
-                            child: Text(
-                              (_user?.name ?? 'M')[0].toUpperCase(),
-                              style: const TextStyle(
-                                color:      AppTheme.secondary,
-                                fontWeight: FontWeight.bold)),
+                      // Saldo — toque vai para carteira
+                      GestureDetector(
+                        onTap: () => context.push('/wallet'),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.1),
+                              blurRadius: 8)],
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            _user?.name?.split(' ').first ?? 'Motorista',
-                            style: const TextStyle(fontWeight: FontWeight.w600)),
-                        ]),
+                          child: Row(children: [
+                            Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color:        AppTheme.secondary
+                                    .withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(8)),
+                              child: const Icon(
+                                Icons.account_balance_wallet,
+                                color: AppTheme.secondary, size: 16),
+                            ),
+                            const SizedBox(width: 8),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Text('Saldo',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color:    AppTheme.gray)),
+                                Text(
+                                  _balanceLabel,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize:   15,
+                                    color:      AppTheme.dark)),
+                              ],
+                            ),
+                          ]),
+                        ),
                       ),
 
                       const Spacer(),
 
-                      
 
                       _MapBtn(
                         active:      _ridesLayerActive,
@@ -585,7 +626,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       _IconBtn(
                         icon:  Icons.person_outline,
                         color: AppTheme.dark,
-                        onTap: () => context.go('/profile'),
+                        onTap: () => context.push('/profile'),
                       ),
                       const SizedBox(width: 8),
 
@@ -669,7 +710,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ]),
-    );
+      ), // fecha Scaffold
+    ); // fecha PopScope
   }
 }
 

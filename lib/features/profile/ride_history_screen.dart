@@ -115,7 +115,7 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
         title: const Text('Histórico de corridas'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.go('/profile'),
+          onPressed: () => context.push('/profile'),
         ),
       ),
       body: _loading

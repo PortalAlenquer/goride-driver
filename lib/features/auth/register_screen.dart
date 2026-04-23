@@ -53,7 +53,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       // Salva token FCM após registro
       ChatService().saveFcmToken();
 
-      if (mounted) context.go('/home');
+      if (mounted) context.push('/home');
     } on DioException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -92,7 +92,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             )
           : IconButton(
               icon: const Icon(Icons.arrow_back),
-              onPressed: () => context.go('/login'),
+              onPressed: () => context.push('/login'),
             ),
       ),
       body: Form(

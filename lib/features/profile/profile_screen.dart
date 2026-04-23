@@ -142,7 +142,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         title: const Text('Meu perfil'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.go('/home'),
+          onPressed: () => context.push('/home'),
         ),
         actions: [
           IconButton(
@@ -300,32 +300,37 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 _ProfileOption(
                   icon:  Icons.account_balance_wallet_outlined,
                   label: 'Minha carteira',
-                  onTap: () => context.go('/wallet'),
+                  onTap: () => context.push('/wallet'),
                 ),
                 _ProfileOption(
                   icon:  Icons.directions_car,
                   label: 'Veículo e documentos',
-                  onTap: () => context.go('/complete-profile'),
+                  onTap: () => context.push('/complete-profile'),
                 ),
                 _ProfileOption(
                   icon:  Icons.history,
                   label: 'Histórico de corridas',
-                  onTap: () => context.go('/ride-history'),
+                  onTap: () => context.push('/earnings'),
+                ),
+                _ProfileOption(
+                  icon:  Icons.history,
+                  label: 'Histórico de corridas',
+                  onTap: () => context.push('/ride-history'),
                 ),
                 _ProfileOption(
                   icon:  Icons.payment,
                   label: 'Formas de pagamento aceitas',
-                  onTap: () => context.go('/payment-methods'),
+                  onTap: () => context.push('/payment-methods'),
                 ),
                 _ProfileOption(
   icon:  Icons.headset_mic,
   label: 'Suporte',
-  onTap: () => context.go('/support'),
+  onTap: () => context.push('/support'),
 ),
                 _ProfileOption(
                   icon:  Icons.lock_outlined,
                   label: 'Alterar senha',
-                  onTap: () => context.go('/change-password'),
+                  onTap: () => context.push('/change-password'),
                 ),
               ],
             ),

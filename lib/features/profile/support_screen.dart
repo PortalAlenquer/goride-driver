@@ -117,7 +117,7 @@ class _SupportScreenState extends State<SupportScreen> {
         title: const Text('Suporte'),
         leading: IconButton(
           icon:      const Icon(Icons.arrow_back),
-          onPressed: () => context.go('/profile'),
+          onPressed: () => context.push('/profile'),
         ),
         // Indicador discreto de atualização em background
         actions: [
