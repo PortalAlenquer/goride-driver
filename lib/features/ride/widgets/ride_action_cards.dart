@@ -1,15 +1,6 @@
 ﻿import 'package:flutter/material.dart';
-import '../../../core/theme/app_theme.dart';
+import '../../../core/config/app_theme.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ride_action_cards.dart
-//
-// Nota: os cards de pagamento e sucesso viraram telas próprias:
-//   completed         → RidePaymentScreen  (/ride-payment/:id)
-//   payment_confirmed → PassengerRatingScreen (/ride-rating/:id)
-//
-// Aqui fica apenas o RideCancelledCard — exibido inline no ride_detail.
-// ─────────────────────────────────────────────────────────────────────────────
 
 class RideCancelledCard extends StatelessWidget {
   final VoidCallback onDone;

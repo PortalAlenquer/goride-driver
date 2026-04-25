@@ -1,4 +1,4 @@
-import '../api/api_client.dart';
+import '../config/api_client.dart';
 import '../models/ride_model.dart';
 
 class RideService {

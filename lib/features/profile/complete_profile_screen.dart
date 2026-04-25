@@ -3,8 +3,8 @@ import 'package:go_router/go_router.dart';
 import 'package:dio/dio.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
-import '../../core/theme/app_theme.dart';
-import '../../core/api/api_client.dart';
+import '../../core/config/app_theme.dart';
+import '../../core/config/api_client.dart';
 
 class CompleteProfileScreen extends StatefulWidget {
   const CompleteProfileScreen({super.key});

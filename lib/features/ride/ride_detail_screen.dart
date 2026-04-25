@@ -2,8 +2,8 @@
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import '../../core/theme/app_theme.dart';
-import '../../core/helpers/maps_helper.dart';
+import '../../core/config/app_theme.dart';
+import '../../core/config/maps_helper.dart';
 import '../../core/models/ride_model.dart';
 import '../../core/services/ride_service.dart';
 import '../../core/services/chat_service.dart';

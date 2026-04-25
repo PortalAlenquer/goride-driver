@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import '../api/api_client.dart';
+import '../config/api_client.dart';
 import '../models/chat_message.dart';
 
 export '../models/chat_message.dart';

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../../../core/theme/app_theme.dart';
+import '../../../core/config/app_theme.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RideSlider — widget padrão para toda a viagem

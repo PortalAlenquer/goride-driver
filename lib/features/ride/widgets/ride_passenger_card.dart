@@ -1,5 +1,5 @@
 ﻿import 'package:flutter/material.dart';
-import '../../../core/theme/app_theme.dart';
+import '../../../core/config/app_theme.dart';
 import '../../../core/models/ride_model.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────

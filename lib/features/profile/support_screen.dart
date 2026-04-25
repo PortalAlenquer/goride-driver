@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../../core/theme/app_theme.dart';
+import '../../core/config/app_theme.dart';
 import '../../core/services/support_service.dart';
 
 class SupportScreen extends StatefulWidget {

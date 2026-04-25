@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
-import '../api/api_client.dart';
+import '../config/api_client.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WebSocketService — Singleton

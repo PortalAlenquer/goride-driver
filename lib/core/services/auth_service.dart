@@ -1,5 +1,5 @@
-import '../api/api_client.dart';
-import '../constants/api_constants.dart';
+import '../config/api_client.dart';
+import '../config/api_constants.dart';
 import '../models/user_model.dart';
 import 'chat_service.dart';
 

@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
-import '../../core/theme/app_theme.dart';
+import '../../core/config/app_theme.dart';
 import '../../core/models/user_model.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/home_service.dart';

@@ -1,6 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import '../constants/api_constants.dart';
+import 'api_constants.dart';
 
 class MapsHelper {
   static Future<List<LatLng>> getRoute({

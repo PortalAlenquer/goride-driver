@@ -1,7 +1,7 @@
 ﻿import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../../../core/theme/app_theme.dart';
+import '../../../core/config/app_theme.dart';
 import '../../ride/widgets/slide_action_button.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────

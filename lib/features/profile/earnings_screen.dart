@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import '../../core/theme/app_theme.dart';
-import '../../core/api/api_client.dart';
+import '../../core/config/app_theme.dart';
+import '../../core/config/api_client.dart';
 
 class EarningsScreen extends StatefulWidget {
   const EarningsScreen({super.key});

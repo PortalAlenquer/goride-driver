@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
-import '../../core/theme/app_theme.dart';
+import '../../core/config/app_theme.dart';
 import '../../core/models/wallet_model.dart';
 import '../../core/services/wallet_service.dart';
 

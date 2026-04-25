@@ -3,7 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
-import '../../core/theme/app_theme.dart';
+import '../../core/config/app_theme.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/profile_service.dart';
 import '../../core/models/user_model.dart';

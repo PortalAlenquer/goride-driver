@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'core/api/api_client.dart';
-import 'core/theme/app_theme.dart';
-import 'core/router/app_router.dart';
+import 'core/config/api_client.dart';
+import 'core/config/app_theme.dart';
+import 'core/config/app_router.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'firebase_options.dart';

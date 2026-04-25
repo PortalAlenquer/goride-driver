@@ -1,5 +1,5 @@
 import 'package:geolocator/geolocator.dart';
-import '../api/api_client.dart';
+import '../config/api_client.dart';
 
 class SupportService {
   static final SupportService _instance = SupportService._internal();
