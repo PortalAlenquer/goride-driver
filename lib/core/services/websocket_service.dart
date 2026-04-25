@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config/api_client.dart';
+import '../config/api_constants.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WebSocketService — Singleton
@@ -22,7 +23,7 @@ class WebSocketService {
   WebSocketService._internal();
 
   // ── Conexão ───────────────────────────────────────────────────
-  static const _wsUrl = 'ws://89.116.73.59:8083/app/goride2-key';
+  String get _wsUrl => ApiConstants.wsUrl;
 
   WebSocketChannel?   _channel;
   StreamSubscription? _sub;
