@@ -71,12 +71,14 @@ class _RideSliderState extends State<RideSlider>
     );
   }
 
-  // Reseta o slider quando a operação termina (busy: true → false)
-  // Isso evita o travamento após uma transição de status bem-sucedida
+  // Reseta o slider quando o status muda (key nova = nova instância)
+  // NÃO reseta por busy — causava travamento quando _loadRide() retornava
+  // antes do status mudar no backend
   @override
   void didUpdateWidget(covariant RideSlider oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.busy && !widget.busy) {
+    // Só reseta se o confirmLabel mudou — indica transição de status real
+    if (oldWidget.confirmLabel != widget.confirmLabel) {
       setState(() {
         _done = false;
         _pos  = _startPos;

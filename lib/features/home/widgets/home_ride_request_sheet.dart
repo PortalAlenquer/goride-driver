@@ -4,6 +4,26 @@ import 'package:flutter/services.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../ride/widgets/slide_action_button.dart';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Layout padrão mercado (Uber/99):
+//
+//  ┌─────────────────────────────────────┐
+//  │  Nova Corrida              [💳 PIX] │
+//  │                                     │
+//  │         R$ 24,90                    │  ← valor grande
+//  │   ★ 4.8  · 127 corridas            │  ← passageiro
+//  │   ⚡ Demanda alta 1.5x              │  ← surge (condicional)
+//  ├─────────────────────────────────────┤
+//  │  [🚗 4 min]  Rua das Flores, 142   │  ← origem + tempo até
+//  │       │                             │
+//  │  [⏱ 12 min] Av. Paulista, 900      │  ← destino + duração
+//  ├─────────────────────────────────────┤
+//  │  2,4 km  ·  R$ 2,10/km            │  ← métricas
+//  ├─────────────────────────────────────┤
+//  │  [Pular] ←← [🚗 contador] →→ [Aceitar] │
+//  └─────────────────────────────────────┘
+// ─────────────────────────────────────────────────────────────────────────────
+
 class HomeRideRequestSheet extends StatefulWidget {
   final Map<String, dynamic>    ride;
   final VoidCallback            onAccept;
@@ -65,158 +85,272 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
     widget.onReject();
   }
 
+  // ── Helpers de dados ──────────────────────────────────────────
+
+  Map<String, dynamic> get _ride => widget.ride;
+
+  double get _price =>
+      double.tryParse(_ride['estimated_price']?.toString() ?? '0') ?? 0.0;
+
+  double get _distKm =>
+      double.tryParse(_ride['distance_km']?.toString() ?? '0') ?? 0.0;
+
+  int get _durationMin =>
+      int.tryParse(_ride['duration_minutes']?.toString() ?? '0') ?? 0;
+
+  // Tempo estimado até o passageiro (~40% da duração da viagem)
+  int get _pickupMin => (_durationMin * 0.4).round().clamp(1, 99);
+
+  // R$/km real da tabela (preferível) ou fallback com divisão
+  double get _pricePerKm {
+    final real = double.tryParse(_ride['price_per_km']?.toString() ?? '');
+    if (real != null && real > 0) return real;
+    return _distKm > 0 ? _price / _distKm : 0.0;
+  }
+
+  bool get _hasPricePerKm =>
+      double.tryParse(_ride['price_per_km']?.toString() ?? '') != null;
+
+  bool get _hasSurge {
+    final v = double.tryParse(_ride['surge_multiplier']?.toString() ?? '1') ?? 1.0;
+    return v > 1.0;
+  }
+
+  double get _surgeMultiplier =>
+      double.tryParse(_ride['surge_multiplier']?.toString() ?? '1') ?? 1.0;
+
+  // Passageiro
+  Map<String, dynamic>? get _passenger =>
+      _ride['passenger'] as Map<String, dynamic>?;
+
+  double get _passengerRating =>
+      double.tryParse(_passenger?['rating']?.toString() ?? '5') ?? 5.0;
+
+  int get _passengerRides =>
+      int.tryParse(_passenger?['total_rides']?.toString() ?? '0') ?? 0;
+
+  String get _paymentMethod =>
+      _ride['payment_method']?.toString() ?? 'cash';
+
+  IconData get _payIcon => switch (_paymentMethod) {
+    'pix'    => Icons.pix,
+    'card'   => Icons.credit_card,
+    'wallet' => Icons.account_balance_wallet,
+    _        => Icons.attach_money,
+  };
+
+  String get _payLabel => switch (_paymentMethod) {
+    'pix'    => 'PIX',
+    'card'   => 'Cartão',
+    'wallet' => 'Carteira',
+    _        => 'Dinheiro',
+  };
+
+  // Cor da avaliação do passageiro
+  Color get _ratingColor {
+    if (_passengerRating >= 4.5) return AppTheme.secondary;
+    if (_passengerRating >= 4.0) return AppTheme.warning;
+    return AppTheme.danger;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final ride     = widget.ride;
-    final price    = ride['estimated_price'];
-    final dist     = ride['distance_km'];
-    final duration = ride['duration_minutes'];
-    final feeType  = ride['fee_type'] ?? 'percentage';
-    final feeVal   = double.tryParse(ride['fee_value']?.toString() ?? '0') ?? 0.0;
-    final priceD   = double.tryParse(price?.toString() ?? '0') ?? 0.0;
-    final fee      = feeType == 'percentage' ? priceD * (feeVal / 100) : feeVal;
-    final netPrice = priceD;
-
-    return Padding(
-      padding: const EdgeInsets.all(24),
+    return Container(
+      decoration: const BoxDecoration(
+        color:        Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
 
           // Handle
-          Container(
-            width: 40, height: 4,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              borderRadius: BorderRadius.circular(2))),
-          const SizedBox(height: 16),
-
-          // ── Header ─────────────────────────────────────────
-          Row(children: [
-            Container(
-              padding: const EdgeInsets.all(10),
+          Padding(
+            padding: const EdgeInsets.only(top: 10, bottom: 4),
+            child: Container(
+              width: 36, height: 4,
               decoration: BoxDecoration(
-                color: AppTheme.secondary.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12)),
-              child: const Icon(Icons.directions_car,
-                color: AppTheme.secondary, size: 28)),
-            const SizedBox(width: 12),
-            const Expanded(child: Column(
+                color:        Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2))),
+          ),
+
+          Padding(
+            padding: EdgeInsets.only(
+              left:   20, right: 20,
+              bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+            ),
+            child: Column(
+              mainAxisSize:       MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Nova corrida!',
-                  style: TextStyle(
-                    fontSize: 20, fontWeight: FontWeight.bold)),
-                Text('Deslize para aceitar',
-                  style: TextStyle(color: AppTheme.gray, fontSize: 13)),
-              ],
-            )),
-          ]),
 
-          const SizedBox(height: 16),
+                // ── Título + pagamento ───────────────────────
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Nova Corrida',
+                      style: TextStyle(
+                        fontSize:   13,
+                        fontWeight: FontWeight.w600,
+                        color:      AppTheme.gray,
+                        letterSpacing: 0.5)),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color:        AppTheme.primary.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(20)),
+                      child: Row(children: [
+                        Icon(_payIcon, size: 13, color: AppTheme.primary),
+                        const SizedBox(width: 5),
+                        Text(_payLabel,
+                          style: const TextStyle(
+                            fontSize:   12,
+                            fontWeight: FontWeight.w600,
+                            color:      AppTheme.primary)),
+                      ]),
+                    ),
+                  ],
+                ),
 
-          // ── Card de valores ────────────────────────────────
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: AppTheme.secondary.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: AppTheme.secondary.withValues(alpha: 0.2))),
-            child: Column(children: [
-              Row(children: [
-                Expanded(child: _ValueCard(
-                  label: 'Valor bruto',
-                  value: 'R\$ ${priceD.toStringAsFixed(2)}',
-                  color: AppTheme.dark,
-                  large: true)),
-                Container(
-                  width: 1, height: 40,
-                  color: Colors.grey.shade200),
-                Expanded(child: _ValueCard(
-                  label: 'Distância',
-                  value: dist != null
-                    ? '${double.parse(dist.toString()).toStringAsFixed(1)} km'
-                    : '—',
-                  color: AppTheme.primary,
-                  icon: Icons.route)),
-              ]),
-              const Divider(height: 20),
-              Row(children: [
-                Expanded(child: _ValueCard(
-                  label: 'Taxa plataforma',
-                  value: '- R\$ ${fee.toStringAsFixed(2)}',
-                  color: AppTheme.danger,
-                  icon: Icons.remove_circle_outline)),
-                Container(
-                  width: 1, height: 40,
-                  color: Colors.grey.shade200),
-                Expanded(child: _ValueCard(
-                  label: 'Tempo estimado',
-                  value: duration != null ? '$duration min' : '—',
-                  color: AppTheme.warning,
-                  icon: Icons.access_time)),
-              ]),
-              const Divider(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Você recebe:',
+                const SizedBox(height: 12),
+
+                // ── Valor em destaque ────────────────────────
+                Text(
+                  'R\$ ${_price.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontSize:   44,
+                    fontWeight: FontWeight.bold,
+                    color:      AppTheme.dark,
+                    height:     1.0,
+                    letterSpacing: -1)),
+
+                const SizedBox(height: 10),
+
+                // ── Passageiro: rating + corridas ────────────
+                Row(children: [
+                  Icon(Icons.star_rounded,
+                    color: _ratingColor, size: 18),
+                  const SizedBox(width: 4),
+                  Text(
+                    _passengerRating.toStringAsFixed(1),
                     style: TextStyle(
-                      fontWeight: FontWeight.bold, fontSize: 15)),
-                  Text('R\$ ${netPrice.toStringAsFixed(2)}',
-                    style: const TextStyle(
+                      fontSize:   15,
                       fontWeight: FontWeight.bold,
-                      fontSize:   22,
-                      color:      AppTheme.secondary)),
+                      color:      _ratingColor)),
+                  const SizedBox(width: 6),
+                  Text('·',
+                    style: const TextStyle(
+                      color: AppTheme.gray, fontSize: 15)),
+                  const SizedBox(width: 6),
+                  Text(
+                    _passengerRides > 0
+                        ? '$_passengerRides corridas'
+                        : 'Novo passageiro',
+                    style: const TextStyle(
+                      fontSize: 14, color: AppTheme.gray)),
+                ]),
+
+                // ── Surge (demanda alta) ─────────────────────
+                if (_hasSurge) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color:        AppTheme.warning.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: AppTheme.warning.withValues(alpha: 0.3))),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.bolt,
+                          size: 14, color: AppTheme.warning),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Demanda alta · ${_surgeMultiplier.toStringAsFixed(1)}x',
+                          style: const TextStyle(
+                            fontSize:   12,
+                            fontWeight: FontWeight.bold,
+                            color:      AppTheme.warning)),
+                      ],
+                    ),
+                  ),
                 ],
-              ),
-            ]),
-          ),
 
-          const SizedBox(height: 16),
+                const SizedBox(height: 16),
 
-          // ── Endereços ──────────────────────────────────────
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color:        const Color(0xFFF3F4F6),
-              borderRadius: BorderRadius.circular(12)),
-            child: Column(children: [
-              Row(children: [
-                const Icon(Icons.my_location,
-                  color: AppTheme.primary, size: 16),
-                const SizedBox(width: 8),
-                Expanded(child: Text(
-                  ride['origin_address'] ?? '—',
-                  style:    const TextStyle(fontSize: 13),
-                  overflow: TextOverflow.ellipsis)),
-              ]),
-              const Divider(height: 12),
-              Row(children: [
-                const Icon(Icons.location_on,
-                  color: AppTheme.danger, size: 16),
-                const SizedBox(width: 8),
-                Expanded(child: Text(
-                  ride['destination_address'] ?? '—',
-                  style:    const TextStyle(fontSize: 13),
-                  overflow: TextOverflow.ellipsis)),
-              ]),
-            ]),
-          ),
+                // ── Rota: Origem ─────────────────────────────
+                _RouteRow(
+                  isOrigin:  true,
+                  address:   _ride['origin_address']?.toString() ?? '—',
+                  timeBadge: '$_pickupMin min',
+                  badgeColor: AppTheme.primary,
+                  badgeIcon:  Icons.directions_car,
+                ),
 
-          const SizedBox(height: 20),
+                // Linha conectora
+                Padding(
+                  padding: const EdgeInsets.only(left: 5),
+                  child: Column(
+                    children: List.generate(3, (_) => Container(
+                      margin: const EdgeInsets.symmetric(vertical: 2),
+                      width: 1.5, height: 5,
+                      color: Colors.grey.shade300)),
+                  ),
+                ),
 
-          // ── RideSlider: Pular | thumb+countdown | Aceitar ─
-          RideSlider(
-            confirmLabel: 'Aceitar',
-            rejectLabel:  'Pular',
-            confirmColor: AppTheme.secondary,
-            rejectColor:  AppTheme.gray,
-            thumbIcon:    Icons.directions_car,
-            countdown:    _remaining,
-            onConfirm:    _handleAccept,
-            onReject:     _handleReject,
+                // ── Rota: Destino ────────────────────────────
+                _RouteRow(
+                  isOrigin:   false,
+                  address:    _ride['destination_address']?.toString() ?? '—',
+                  timeBadge:  _durationMin > 0 ? '$_durationMin min' : '—',
+                  badgeColor: AppTheme.secondary,
+                  badgeIcon:  Icons.access_time,
+                ),
+
+                const SizedBox(height: 14),
+
+                // ── Métricas: km · R$/km ─────────────────────
+                Row(children: [
+                  if (_distKm > 0) ...[
+                    const Icon(Icons.straighten,
+                      size: 14, color: AppTheme.gray),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_distKm.toStringAsFixed(1)} km',
+                      style: const TextStyle(
+                        fontSize: 13, color: AppTheme.gray)),
+                    const SizedBox(width: 12),
+                  ],
+                  const Icon(Icons.route,
+                    size: 14, color: AppTheme.gray),
+                  const SizedBox(width: 4),
+                  Text(
+                    'R\$ ${_pricePerKm.toStringAsFixed(2)}/km'
+                    '${_hasPricePerKm ? '' : '*'}',
+                    style: const TextStyle(
+                      fontSize: 13, color: AppTheme.gray)),
+                ]),
+
+                const SizedBox(height: 16),
+                const Divider(height: 1),
+                const SizedBox(height: 14),
+
+                // ── Slider ───────────────────────────────────
+                RideSlider(
+                  confirmLabel: 'Aceitar',
+                  rejectLabel:  'Pular',
+                  confirmColor: AppTheme.secondary,
+                  rejectColor:  AppTheme.gray,
+                  thumbIcon:    Icons.directions_car,
+                  countdown:    _remaining,
+                  onConfirm:    _handleAccept,
+                  onReject:     _handleReject,
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -225,45 +359,83 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Linha de rota — origem ou destino com badge de tempo
+// ─────────────────────────────────────────────────────────────────
 
-class _ValueCard extends StatelessWidget {
-  final String   label;
-  final String   value;
-  final Color    color;
-  final IconData? icon;
-  final bool     large;
+class _RouteRow extends StatelessWidget {
+  final bool    isOrigin;
+  final String  address;
+  final String  timeBadge;
+  final Color   badgeColor;
+  final IconData badgeIcon;
 
-  const _ValueCard({
-    required this.label,
-    required this.value,
-    required this.color,
-    this.icon,
-    this.large = false,
+  const _RouteRow({
+    required this.isOrigin,
+    required this.address,
+    required this.timeBadge,
+    required this.badgeColor,
+    required this.badgeIcon,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-            style: const TextStyle(fontSize: 11, color: AppTheme.gray)),
-          const SizedBox(height: 4),
-          Row(children: [
-            if (icon != null) ...[
-              Icon(icon, color: color, size: 14),
-              const SizedBox(width: 4),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+
+        // Indicador de ponto
+        Container(
+          width: 12, height: 12,
+          decoration: isOrigin
+            ? BoxDecoration(
+                shape:  BoxShape.circle,
+                color:  Colors.white,
+                border: Border.all(
+                  color: AppTheme.primary, width: 2.5))
+            : BoxDecoration(
+                color:        AppTheme.danger,
+                borderRadius: BorderRadius.circular(3)),
+        ),
+
+        const SizedBox(width: 12),
+
+        // Endereço — fonte maior para facilitar leitura
+        Expanded(
+          child: Text(
+            address,
+            style: const TextStyle(
+              fontSize:   15,
+              fontWeight: FontWeight.w500,
+              color:      AppTheme.dark,
+              height:     1.3),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis),
+        ),
+
+        const SizedBox(width: 8),
+
+        // Badge de tempo
+        Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color:        badgeColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12)),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(badgeIcon, size: 11, color: badgeColor),
+              const SizedBox(width: 3),
+              Text(
+                timeBadge,
+                style: TextStyle(
+                  fontSize:   11,
+                  fontWeight: FontWeight.bold,
+                  color:      badgeColor)),
             ],
-            Text(value,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize:   large ? 18 : 14,
-                color:      color)),
-          ]),
-        ],
-      ),
+          ),
+        ),
+      ],
     );
   }
 }

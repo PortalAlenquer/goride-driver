@@ -126,12 +126,19 @@ class _HomeScreenState extends State<HomeScreen> {
     _fallbackTimer?.cancel();
   }
 
+  // Lock síncrono — impede que WS + fallback abram dois sheets ao mesmo tempo
+  bool _fetchingRide = false;
+
   // Busca corrida completa via API e exibe o sheet
   // Se rideId não fornecido → busca qualquer pendente (modo fallback)
   Future<void> _fetchAndShowRide({
     String? rideId,
     Map<String, dynamic>? fallbackPayload,
   }) async {
+    // Guard duplo: _hasNewRide (sheet aberto) + _fetchingRide (em andamento)
+    if (_hasNewRide || _fetchingRide || !mounted) return;
+    _fetchingRide = true; // lock síncrono — antes de qualquer await
+
     try {
       final rides = await _homeService.getPendingRides();
       if (rides.isEmpty || !mounted || _hasNewRide) return;
@@ -147,6 +154,7 @@ class _HomeScreenState extends State<HomeScreen> {
         rideData = rides.first;
       }
 
+      if (!mounted || _hasNewRide) return;
       setState(() { _hasNewRide = true; _pendingRide = rideData; });
       await _notifyNewRide();
       if (mounted) _showRideRequest();
@@ -163,11 +171,14 @@ class _HomeScreenState extends State<HomeScreen> {
           'payment_method':      fallbackPayload['payment_method'],
           'fee_type':            'fixed',
           'fee_value':           0.0,
+          // Sem price_per_km — será exibido como estimativa
         };
         setState(() { _hasNewRide = true; _pendingRide = partial; });
         await _notifyNewRide();
         if (mounted) _showRideRequest();
       }
+    } finally {
+      _fetchingRide = false; // libera o lock sempre
     }
   }
 
@@ -226,7 +237,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final activeRideId = await _homeService.checkActiveRide();
       if (activeRideId != null && mounted) {
-        context.push('/ride-detail/$activeRideId');
+        context.go('/ride-detail/$activeRideId');
         return;
       }
     } catch (_) {
@@ -307,7 +318,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _acceptRide(String rideId) async {
     try {
       await _homeService.acceptRide(rideId);
-      if (mounted) context.push('/ride-detail/$rideId');
+      if (mounted) context.go('/ride-detail/$rideId');
     } catch (_) {
       if (mounted) _showSnack('Erro ao aceitar corrida.', AppTheme.danger);
     }
@@ -556,7 +567,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                       // Saldo — toque vai para carteira
                       GestureDetector(
-                        onTap: () => context.push('/wallet'),
+                        onTap: () => context.go('/wallet'),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 16, vertical: 10),
@@ -601,6 +612,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                       const Spacer(),
 
+                      
 
                       _MapBtn(
                         active:      _ridesLayerActive,
@@ -626,7 +638,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       _IconBtn(
                         icon:  Icons.person_outline,
                         color: AppTheme.dark,
-                        onTap: () => context.push('/profile'),
+                        onTap: () => context.go('/profile'),
                       ),
                       const SizedBox(width: 8),
 

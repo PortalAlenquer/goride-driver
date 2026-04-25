@@ -12,6 +12,8 @@ import '../../features/profile/payment_methods_screen.dart';
 import '../../features/profile/complete_profile_screen.dart';
 import '../../features/profile/support_screen.dart';
 import '../../features/profile/earnings_screen.dart';
+import '../../features/ride/passenger_rating_screen.dart';
+import '../../features/ride/ride_payment_screen.dart';
 
 
 class AppRouter {
@@ -29,13 +31,42 @@ class AppRouter {
       GoRoute(path: '/payment-methods',  builder: (context, _) => const PaymentMethodsScreen()),
       GoRoute(path: '/complete-profile', builder: (context, _) => const CompleteProfileScreen()),
       GoRoute(path: '/earnings',         builder: (context, __) => const EarningsScreen()),
+      GoRoute(path: '/support', builder: (context, _) => const SupportScreen()),
       GoRoute(
         path: '/ride-detail/:id',
         builder: (_, state) => RideDetailScreen(
           rideId: state.pathParameters['id']!,
         ),
       ),
-      GoRoute(path: '/support', builder: (context, _) => const SupportScreen()),
+        GoRoute(
+        path: '/ride-payment/:rideId',
+        builder: (_, state) {
+          final extras = state.extra as Map<String, dynamic>?;
+          return RidePaymentScreen(
+            rideId:        state.pathParameters['rideId']!,
+            payMethod:     extras?['payMethod']?.toString() ?? 'cash',
+            price: double.tryParse(
+                extras?['price']?.toString() ?? '0') ?? 0.0,
+            passengerName: extras?['passengerName']?.toString(),
+          );
+        },
+      ),
+ 
+
+          GoRoute(
+        path: '/ride-rating/:rideId',
+        builder: (_, state) {
+          final extras = state.extra as Map<String, dynamic>?;
+          return PassengerRatingScreen(
+            rideId:        state.pathParameters['rideId']!,
+            passengerName: extras?['passengerName']?.toString(),
+            price: extras?['price'] != null
+                ? double.tryParse(extras!['price'].toString())
+                : null,
+          );
+        },
+      ),
+
       
     ],
   );
