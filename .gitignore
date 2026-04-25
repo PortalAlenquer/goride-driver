@@ -38,7 +38,7 @@ migrate_working_dir/
 *.env
 
 # Arquivos com dados sensíveis
-lib/core/constants/api_constants.dart
+lib/core/config/api_constants.dart
 
 # Symbolication related
 app.*.symbols
