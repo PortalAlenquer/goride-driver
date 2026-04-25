@@ -152,7 +152,7 @@ class _RideDetailScreenState extends State<RideDetailScreen> {
 
   void _startPolling() {
     Future.doWhile(() async {
-      await Future.delayed(const Duration(seconds: 8));
+      await Future.delayed(const Duration(seconds: 12));
       if (!mounted) return false;
       if (_ride != null && !_ride!.isActive) return false;
       await _loadRide();

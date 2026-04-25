@@ -35,7 +35,7 @@ class HomeRideRequestSheet extends StatefulWidget {
     required this.ride,
     required this.onAccept,
     required this.onReject,
-    this.timeoutSeconds = 20,
+    this.timeoutSeconds = 120,
   });
 
   @override
@@ -190,7 +190,7 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
                   children: [
                     const Text('Nova Corrida',
                       style: TextStyle(
-                        fontSize:   13,
+                        fontSize:   18,
                         fontWeight: FontWeight.w600,
                         color:      AppTheme.gray,
                         letterSpacing: 0.5)),
@@ -205,7 +205,7 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
                         const SizedBox(width: 5),
                         Text(_payLabel,
                           style: const TextStyle(
-                            fontSize:   12,
+                            fontSize:   18,
                             fontWeight: FontWeight.w600,
                             color:      AppTheme.primary)),
                       ]),
@@ -226,30 +226,6 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
                     letterSpacing: -1)),
 
                 const SizedBox(height: 10),
-
-                // ── Passageiro: rating + corridas ────────────
-                Row(children: [
-                  Icon(Icons.star_rounded,
-                    color: _ratingColor, size: 18),
-                  const SizedBox(width: 4),
-                  Text(
-                    _passengerRating.toStringAsFixed(1),
-                    style: TextStyle(
-                      fontSize:   15,
-                      fontWeight: FontWeight.bold,
-                      color:      _ratingColor)),
-                  const SizedBox(width: 6),
-                  Text('·',
-                    style: const TextStyle(
-                      color: AppTheme.gray, fontSize: 15)),
-                  const SizedBox(width: 6),
-                  Text(
-                    _passengerRides > 0
-                        ? '$_passengerRides corridas'
-                        : 'Novo passageiro',
-                    style: const TextStyle(
-                      fontSize: 14, color: AppTheme.gray)),
-                ]),
 
                 // ── Surge (demanda alta) ─────────────────────
                 if (_hasSurge) ...[
@@ -279,8 +255,97 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
                   ),
                 ],
 
-                const SizedBox(height: 16),
-
+              // ── Métricas: km · R$/km ─────────────────────
+                Row(children: [
+                  if (_distKm > 0) ...[
+                    const Icon(Icons.straighten,
+                      size: 14, color: AppTheme.gray),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_distKm.toStringAsFixed(1)} km',
+                      style: const TextStyle(
+                        fontSize: 15, color: AppTheme.gray)),
+                    const SizedBox(width: 12),
+                  ],
+                  const Icon(Icons.route,
+                    size: 14, color: AppTheme.gray),
+                  const SizedBox(width: 4),
+                  Text(
+                    'R\$ ${_pricePerKm.toStringAsFixed(2)}/km'
+                    '${_hasPricePerKm ? '' : '*'}',
+                    style: const TextStyle(
+                      fontSize: 13, color: AppTheme.gray)),
+                ]),
+                
+               // ── Card do Passageiro ───────────────────────────
+Container(
+  margin: const EdgeInsets.symmetric(vertical: 12),
+  padding: const EdgeInsets.all(12),
+  decoration: BoxDecoration(
+    color: const Color(0xFFF9FAFB), // Um cinza bem claro para destacar do fundo branco
+    borderRadius: BorderRadius.circular(12),
+    border: Border.all(color: Colors.black.withValues(alpha: 0.05)),
+  ),
+  child: Row(
+    children: [
+      // Ícone de Perfil destacado
+      Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 4,
+            )
+          ],
+        ),
+        child: const Icon(Icons.person, color: AppTheme.gray, size: 20),
+      ),
+      const SizedBox(width: 12),
+      
+      // Informações: Nota e Corridas
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.star_rounded, color: _ratingColor, size: 18),
+                const SizedBox(width: 4),
+                Text(
+                  _passengerRating.toStringAsFixed(1),
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: _ratingColor,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '·',
+                  style: TextStyle(color: AppTheme.gray.withValues(alpha: 0.5), fontSize: 15),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  _passengerRides > 0
+                      ? '$_passengerRides corridas'
+                      : 'Novo passageiro',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: AppTheme.gray,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    ],
+  ),
+),
                 // ── Rota: Origem ─────────────────────────────
                 _RouteRow(
                   isOrigin:  true,
@@ -312,27 +377,7 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
 
                 const SizedBox(height: 14),
 
-                // ── Métricas: km · R$/km ─────────────────────
-                Row(children: [
-                  if (_distKm > 0) ...[
-                    const Icon(Icons.straighten,
-                      size: 14, color: AppTheme.gray),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${_distKm.toStringAsFixed(1)} km',
-                      style: const TextStyle(
-                        fontSize: 13, color: AppTheme.gray)),
-                    const SizedBox(width: 12),
-                  ],
-                  const Icon(Icons.route,
-                    size: 14, color: AppTheme.gray),
-                  const SizedBox(width: 4),
-                  Text(
-                    'R\$ ${_pricePerKm.toStringAsFixed(2)}/km'
-                    '${_hasPricePerKm ? '' : '*'}',
-                    style: const TextStyle(
-                      fontSize: 13, color: AppTheme.gray)),
-                ]),
+                
 
                 const SizedBox(height: 16),
                 const Divider(height: 1),

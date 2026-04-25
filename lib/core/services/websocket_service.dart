@@ -63,7 +63,7 @@ class WebSocketService {
         onDone:  _onDone,
       );
       _pingTimer = Timer.periodic(
-        const Duration(seconds: 30), (_) => _sendPing());
+        const Duration(seconds: 60), (_) => _sendPing());
     } catch (_) {
       _scheduleReconnect();
     }

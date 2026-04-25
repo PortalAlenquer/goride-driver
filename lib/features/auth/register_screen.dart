@@ -12,6 +12,17 @@ class RegisterScreen extends StatefulWidget {
   State<RegisterScreen> createState() => _RegisterScreenState();
 }
 
+bool _isValidCpf(String cpf) {
+  final d = cpf.replaceAll(RegExp(r'\D'), '');
+  if (d.length != 11 || RegExp(r'^(\d)\1{10}$').hasMatch(d)) return false;
+  int s = 0;
+  for (int i = 0; i < 9; i++) { s += int.parse(d[i]) * (10 - i); }
+  if ((s * 10 % 11) % 10 != int.parse(d[9])) return false;
+  s = 0;
+  for (int i = 0; i < 10; i++) { s += int.parse(d[i]) * (11 - i); }
+  return (s * 10 % 11) % 10 == int.parse(d[10]);
+}
+
 class _RegisterScreenState extends State<RegisterScreen> {
   final _formKey  = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
@@ -195,7 +206,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
           decoration: const InputDecoration(
             labelText: 'CPF',
             prefixIcon: Icon(Icons.badge_outlined)),
-          validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
+          validator: (v) {
+            if (v!.isEmpty) return 'Obrigatório';
+            if (!_isValidCpf(v)) return 'CPF inválido';
+            return null;
+          },
         ),
         const SizedBox(height: 16),
         TextFormField(

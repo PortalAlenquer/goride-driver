@@ -38,7 +38,10 @@ class ApiClient {
         }
         return handler.next(options);
       },
-      onError: (error, handler) {
+      onError: (error, handler) async {
+        if (error.response?.statusCode == 401) {
+          await _storage.delete(key: 'auth_token');
+        }
         return handler.next(error);
       },
     ));

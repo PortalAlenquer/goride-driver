@@ -1,6 +1,7 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'dart:io';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/services/auth_service.dart';
@@ -171,7 +172,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           backgroundImage: _avatarFile != null
                             ? FileImage(_avatarFile!) as ImageProvider
                             : _existingAvatarUrl != null
-                              ? NetworkImage(_existingAvatarUrl!)
+                              ? CachedNetworkImageProvider(_existingAvatarUrl!)
                               : null,
                           child: (_avatarFile == null &&
                                   _existingAvatarUrl == null)
@@ -309,7 +310,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 _ProfileOption(
                   icon:  Icons.history,
-                  label: 'Histórico de corridas',
+                  label: 'Ganhos',
                   onTap: () => context.push('/earnings'),
                 ),
                 _ProfileOption(

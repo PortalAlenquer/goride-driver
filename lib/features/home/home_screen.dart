@@ -20,7 +20,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _homeService = HomeService();
   final _ws          = WebSocketService();
 
@@ -56,11 +56,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Timer?                        _userTimer;
   Timer?                        _fallbackTimer;
+  Timer?                        _heatTimer;
+  Timer?                        _ridesTimer;
   StreamSubscription<Position>? _positionSub;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadUser();
     _initLocation();
     _startUserPolling();
@@ -68,8 +71,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _userTimer?.cancel();
     _fallbackTimer?.cancel();
+    _heatTimer?.cancel();
+    _ridesTimer?.cancel();
     _positionSub?.cancel();
     _mapController?.dispose();
     _ws.off('ride.requested');
@@ -77,11 +83,23 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _userTimer?.cancel();
+      _fallbackTimer?.cancel();
+    } else if (state == AppLifecycleState.resumed) {
+      _startUserPolling();
+      if (_isOnline && !_hasNewRide) _startWsRideListener();
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Polling usuário — 60s
   // ─────────────────────────────────────────────────────────────
 
   void _startUserPolling() {
+    _userTimer?.cancel();
     _userTimer = Timer.periodic(const Duration(seconds: 60), (_) async {
       if (!mounted) return;
       await _loadUser();
@@ -314,6 +332,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) setState(() { _hasNewRide = false; _pendingRide = null; });
     });
   }
+  
 
   Future<void> _acceptRide(String rideId) async {
     try {
@@ -330,6 +349,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _toggleHeatmap() async {
     if (_heatmapActive) {
+      _heatTimer?.cancel();
       setState(() { _heatmapActive = false; _circles = {}; });
       return;
     }
@@ -409,16 +429,19 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _startHeatRefresh() {
-    Future.doWhile(() async {
-      await Future.delayed(const Duration(seconds: 30));
-      if (!mounted || !_heatmapActive) return false;
+    _heatTimer?.cancel();
+    _heatTimer = Timer.periodic(const Duration(seconds: 120), (_) async {
+      if (!mounted || !_heatmapActive) {
+        _heatTimer?.cancel();
+        return;
+      }
       await _fetchHeatmapData();
-      return true;
     });
   }
 
   Future<void> _toggleRidesLayer() async {
     if (_ridesLayerActive) {
+      _ridesTimer?.cancel();
       setState(() { _ridesLayerActive = false; _rideMarkers = {}; _mapRides = []; });
       return;
     }
@@ -452,11 +475,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _startRidesLayerRefresh() {
-    Future.doWhile(() async {
-      await Future.delayed(const Duration(seconds: 15));
-      if (!mounted || !_ridesLayerActive) return false;
+    _ridesTimer?.cancel();
+    _ridesTimer = Timer.periodic(const Duration(seconds: 60), (_) async {
+      if (!mounted || !_ridesLayerActive) {
+        _ridesTimer?.cancel();
+        return;
+      }
       await _fetchRidesLayer();
-      return true;
     });
   }
 
@@ -505,6 +530,11 @@ class _HomeScreenState extends State<HomeScreen> {
         _walletInfo?['balance']?.toString() ?? '0') ?? 0.0;
     return 'R\$ ${b.toStringAsFixed(2)}';
   }
+
+  bool get _isBalanceNegative {
+  final b = double.tryParse(_walletInfo?['balance']?.toString() ?? '0') ?? 0.0;
+  return b < 0;
+}
 
   // ─────────────────────────────────────────────────────────────
   // Build
@@ -566,49 +596,65 @@ class _HomeScreenState extends State<HomeScreen> {
                     Row(children: [
 
                       // Saldo — toque vai para carteira
-                      GestureDetector(
-                        onTap: () => context.go('/wallet'),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            boxShadow: [BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.1),
-                              blurRadius: 8)],
-                          ),
-                          child: Row(children: [
-                            Container(
-                              padding: const EdgeInsets.all(6),
-                              decoration: BoxDecoration(
-                                color:        AppTheme.secondary
-                                    .withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(8)),
-                              child: const Icon(
-                                Icons.account_balance_wallet,
-                                color: AppTheme.secondary, size: 16),
-                            ),
-                            const SizedBox(width: 8),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Text('Saldo',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    color:    AppTheme.gray)),
-                                Text(
-                                  _balanceLabel,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize:   15,
-                                    color:      AppTheme.dark)),
-                              ],
-                            ),
-                          ]),
-                        ),
-                      ),
+                    GestureDetector(
+  onTap: () => context.go('/wallet'),
+  child: AnimatedContainer(
+    duration: const Duration(milliseconds: 300),
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+    decoration: BoxDecoration(
+      // Se negativo, o fundo fica levemente avermelhado ou mantém branco com borda
+      color: Colors.white, 
+      borderRadius: BorderRadius.circular(12),
+      
+      boxShadow: [
+        BoxShadow(
+          color: _isBalanceNegative 
+              ? AppTheme.danger.withValues(alpha: 0.1) 
+              : Colors.black.withValues(alpha: 0.1),
+          blurRadius: 8,
+        )
+      ],
+    ),
+    child: Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            // Ícone muda para vermelho se negativo
+            color: (_isBalanceNegative ? AppTheme.danger : AppTheme.secondary)
+                .withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            Icons.account_balance_wallet,
+            color: _isBalanceNegative ? AppTheme.danger : AppTheme.secondary,
+            size: 16,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Saldo',
+              style: TextStyle(fontSize: 10, color: AppTheme.gray),
+            ),
+            Text(
+              _balanceLabel,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 15,
+                // O texto do valor fica vermelho se negativo
+                color: _isBalanceNegative ? AppTheme.danger : AppTheme.dark,
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+  ),
+),
 
                       const Spacer(),
 

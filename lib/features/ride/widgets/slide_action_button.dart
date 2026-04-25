@@ -214,7 +214,7 @@ class _RideSliderState extends State<RideSlider>
                         const SizedBox(height: 2),
                         Text(widget.rejectLabel ?? 'Recusar',
                           style: TextStyle(
-                            fontSize: 10, fontWeight: FontWeight.w700,
+                            fontSize: 18, fontWeight: FontWeight.w700,
                             color: leftOpacity > 0.5
                                 ? Colors.white : widget.rejectColor)),
                       ],
@@ -271,7 +271,7 @@ class _RideSliderState extends State<RideSlider>
                       const SizedBox(height: 2),
                       Text(widget.confirmLabel,
                         style: TextStyle(
-                          fontSize: 10, fontWeight: FontWeight.w700,
+                          fontSize: 18, fontWeight: FontWeight.w700,
                           color: rightOpacity > 0.5
                               ? Colors.white : widget.confirmColor)),
                     ],
