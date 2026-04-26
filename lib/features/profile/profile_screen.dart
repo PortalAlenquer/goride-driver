@@ -7,6 +7,7 @@ import '../../core/config/app_theme.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/profile_service.dart';
 import '../../core/models/user_model.dart';
+import '../../core/config/api_client.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -23,6 +24,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Map<String, dynamic>? _driver;
   bool _loading = true;
   bool _saving  = false;
+  int  _unreadNotifications = 0;
 
   final _nameCtrl  = TextEditingController();
   final _emailCtrl = TextEditingController();
@@ -36,6 +38,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void initState() {
     super.initState();
     _loadData();
+    _loadUnreadCount();
   }
 
   @override
@@ -71,6 +74,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  Future<void> _loadUnreadCount() async {
+    try {
+      final res = await ApiClient().dio.get('/notifications');
+      if (!mounted) return;
+      setState(() => _unreadNotifications = res.data['unread_count'] ?? 0);
+    } catch (_) {}
+  }
+
   // ── Avatar ────────────────────────────────────────────────────
 
   Future<void> _pickAvatar() async {
@@ -87,7 +98,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (_saving) return;
     setState(() => _saving = true);
 
-    // Captura messenger antes dos awaits — resolve BuildContext async gap
     final messenger = ScaffoldMessenger.of(context);
 
     try {
@@ -124,7 +134,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // ── Logout ────────────────────────────────────────────────────
 
   Future<void> _logout() async {
-    // Captura router antes do await — resolve BuildContext async gap
     final router = GoRouter.of(context);
     await AuthService().logout();
     router.go('/login');
@@ -134,8 +143,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final rating     = _driver?['rating']?.toString()      ?? '5.0';
-    final totalRides = _driver?['total_rides']?.toString()  ?? '0';
+    final rating     = _driver?['rating']?.toString()     ?? '5.0';
+    final totalRides = _driver?['total_rides']?.toString() ?? '0';
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -323,11 +332,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   label: 'Formas de pagamento aceitas',
                   onTap: () => context.push('/payment-methods'),
                 ),
+
+                // ── Avisos / Notificações ─────────────────────
+                _ProfileOptionBadge(
+                  icon:        Icons.notifications_outlined,
+                  label:       'Avisos e notificações',
+                  badge:       _unreadNotifications,
+                  onTap: () async {
+                    await context.push('/notifications');
+                    // Atualiza badge ao voltar da tela de notificações
+                    _loadUnreadCount();
+                  },
+                ),
+
                 _ProfileOption(
-  icon:  Icons.headset_mic,
-  label: 'Suporte',
-  onTap: () => context.push('/support'),
-),
+                  icon:  Icons.headset_mic,
+                  label: 'Suporte',
+                  onTap: () => context.push('/support'),
+                ),
                 _ProfileOption(
                   icon:  Icons.lock_outlined,
                   label: 'Alterar senha',
@@ -340,7 +362,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────
 // Widgets locais
+// ─────────────────────────────────────────────────────────────────
 
 class _StatCard extends StatelessWidget {
   final IconData icon;
@@ -381,7 +405,6 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-// ── _ProfileOption — cor removida (nunca era passada por nenhum chamador)
 class _ProfileOption extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -399,6 +422,57 @@ class _ProfileOption extends StatelessWidget {
       contentPadding: EdgeInsets.zero,
       leading:  Icon(icon, color: AppTheme.dark),
       title:    Text(label, style: const TextStyle(color: AppTheme.dark)),
+      trailing: Icon(Icons.chevron_right,
+        color: AppTheme.dark.withValues(alpha: 0.5)),
+      onTap: onTap,
+    );
+  }
+}
+
+// ListTile com badge de não lidas
+class _ProfileOptionBadge extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final int badge;
+  final VoidCallback onTap;
+
+  const _ProfileOptionBadge({
+    required this.icon,
+    required this.label,
+    required this.badge,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Icon(icon, color: AppTheme.dark),
+          if (badge > 0)
+            Positioned(
+              right: -6, top: -4,
+              child: Container(
+                padding: const EdgeInsets.all(3),
+                decoration: const BoxDecoration(
+                  color: AppTheme.danger,
+                  shape: BoxShape.circle,
+                ),
+                child: Text(
+                  badge > 9 ? '9+' : '$badge',
+                  style: const TextStyle(
+                    fontSize: 8,
+                    color:      Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+      title: Text(label, style: const TextStyle(color: AppTheme.dark)),
       trailing: Icon(Icons.chevron_right,
         color: AppTheme.dark.withValues(alpha: 0.5)),
       onTap: onTap,

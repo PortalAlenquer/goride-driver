@@ -4,14 +4,18 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import '../../core/config/app_theme.dart';
 import '../../core/models/user_model.dart';
-import '../../core/services/auth_service.dart';
 import '../../core/services/home_service.dart';
 import '../../core/services/websocket_service.dart';
 import 'widgets/home_bottom_panel.dart';
 import 'widgets/home_heat_chip.dart';
 import 'widgets/home_ride_request_sheet.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import '../../main.dart';
+import '../../core/config/api_client.dart';
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,44 +25,58 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  // ── Serviços ──────────────────────────────────────────────────
   final _homeService = HomeService();
   final _ws          = WebSocketService();
 
-  GoogleMapController?   _mapController;
-  Position?              _currentPosition;
-  UserModel?             _user;
-  Map<String, dynamic>?  _driverInfo;
-  Map<String, dynamic>?  _walletInfo;
+  // ── Mapa ──────────────────────────────────────────────────────
+  GoogleMapController? _mapController;
+  Position?            _currentPosition;
+
+  // ── Dados do motorista ────────────────────────────────────────
+  UserModel?            _user;
+  Map<String, dynamic>? _driverInfo;
+  Map<String, dynamic>? _walletInfo;
 
   bool _isOnline      = false;
   bool _loading       = true;
   bool _needsVehicle  = false;
   bool _needsApproval = false;
 
-  bool                  _hasNewRide  = false;
+  // ── Corrida pendente ──────────────────────────────────────────
+  bool                  _hasNewRide   = false;
+  bool                  _fetchingRide = false;
+  int _unreadNotifications = 0;
   Map<String, dynamic>? _pendingRide;
 
+  // ── Heatmap ───────────────────────────────────────────────────
   bool        _heatmapActive = false;
   bool        _heatLoading   = false;
   bool        _showHeat      = true;
   bool        _showSearching = true;
   bool        _showDrivers   = true;
   DateTime?   _heatLastUpdate;
-  Set<Circle> _circles       = {};
+  Set<Circle> _circles        = {};
   List<Map<String, dynamic>> _heatPoints    = [];
   List<Map<String, dynamic>> _searchingNow  = [];
   List<Map<String, dynamic>> _onlineDrivers = [];
 
+  // ── Camada de corridas no mapa ────────────────────────────────
   bool        _ridesLayerActive  = false;
   bool        _ridesLayerLoading = false;
   Set<Marker> _rideMarkers       = {};
   List<Map<String, dynamic>> _mapRides = [];
 
+  // ── Timers e streams ──────────────────────────────────────────
   Timer?                        _userTimer;
   Timer?                        _fallbackTimer;
   Timer?                        _heatTimer;
   Timer?                        _ridesTimer;
   StreamSubscription<Position>? _positionSub;
+
+  // ─────────────────────────────────────────────────────────────
+  // Ciclo de vida
+  // ─────────────────────────────────────────────────────────────
 
   @override
   void initState() {
@@ -67,6 +85,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _loadUser();
     _initLocation();
     _startUserPolling();
+    _listenFcm();
+    _loadUnreadCount();
+    
   }
 
   @override
@@ -95,24 +116,77 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   // ─────────────────────────────────────────────────────────────
+  // FCM — foreground
+  // ─────────────────────────────────────────────────────────────
+
+void _listenFcm() {
+  FirebaseMessaging.onMessage.listen((message) async {
+    if (!mounted) return;
+
+     // Atualiza badge de avisos
+    _loadUnreadCount();
+    
+    // Exibe notificação local para QUALQUER mensagem em foreground
+    await localNotifications.show(
+      100,
+      message.notification?.title ?? '📢 Aviso GoRide',
+      message.notification?.body  ?? '',
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'goride_rides',
+          'Corridas GoRide',
+          channelDescription: 'Notificações de novas corridas',
+          importance:         Importance.max,
+          priority:           Priority.high,
+          playSound:          true,
+          enableVibration:    true,
+          icon:               '@mipmap/ic_launcher',
+        ),
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentSound: true,
+          presentBadge: true,
+        ),
+      ),
+    );
+
+       // Se for corrida nova, exibe o sheet
+    if (_isOnline && !_hasNewRide && message.data['type'] == 'new_ride') {
+      await _fetchAndShowRide(rideId: message.data['ride_id']);
+    }
+  });
+
+  FirebaseMessaging.onMessageOpenedApp.listen((message) {
+    if (!mounted) return;
+    _loadUnreadCount();
+    if (message.data['type'] == 'new_ride') {
+      _fetchAndShowRide(rideId: message.data['ride_id']);
+    }
+  });
+}
+  // ─────────────────────────────────────────────────────────────
   // Polling usuário — 60s
   // ─────────────────────────────────────────────────────────────
 
   void _startUserPolling() {
-    _userTimer?.cancel();
-    _userTimer = Timer.periodic(const Duration(seconds: 60), (_) async {
-      if (!mounted) return;
-      await _loadUser();
-    });
-  }
+  _userTimer?.cancel();
+  _userTimer = Timer.periodic(const Duration(seconds: 60), (_) async {
+    if (!mounted) return;
+    await _loadUser();
+    await _loadUnreadCount();
+  });
+}
+
+Future<void> _loadUnreadCount() async {
+  try {
+    final res = await ApiClient().dio.get('/notifications');
+    if (!mounted) return;
+    setState(() => _unreadNotifications = res.data['unread_count'] ?? 0);
+  } catch (_) {}
+}
 
   // ─────────────────────────────────────────────────────────────
   // WebSocket — canal público 'rides'
-  //
-  // FLUXO ao receber ride.requested:
-  //   1. WS entrega ride_id imediatamente
-  //   2. Flutter chama GET /driver/rides/pending → dados completos (com fee)
-  //   3. Exibe sheet com todos os valores corretos
   // ─────────────────────────────────────────────────────────────
 
   Future<void> _startWsRideListener() async {
@@ -122,16 +196,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     _ws.on('ride.requested', (payload) async {
       if (!mounted || !_isOnline || _hasNewRide) return;
-
-      // Busca a corrida completa via API para ter fee_type, fee_value,
-      // distance_km e duration_minutes — o payload WS não os contém
       await _fetchAndShowRide(
-        rideId: payload['ride_id']?.toString() ?? payload['id']?.toString(),
+        rideId:          payload['ride_id']?.toString() ?? payload['id']?.toString(),
         fallbackPayload: payload,
       );
     });
 
-    // Fallback poll — 30s — garante que corridas não são perdidas
+    // Fallback poll — 30s
     _fallbackTimer?.cancel();
     _fallbackTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
       if (!mounted || !_isOnline || _hasNewRide) return;
@@ -144,24 +215,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _fallbackTimer?.cancel();
   }
 
-  // Lock síncrono — impede que WS + fallback abram dois sheets ao mesmo tempo
-  bool _fetchingRide = false;
+  // ─────────────────────────────────────────────────────────────
+  // Busca corrida e exibe sheet
+  // ─────────────────────────────────────────────────────────────
 
-  // Busca corrida completa via API e exibe o sheet
-  // Se rideId não fornecido → busca qualquer pendente (modo fallback)
   Future<void> _fetchAndShowRide({
     String? rideId,
     Map<String, dynamic>? fallbackPayload,
   }) async {
-    // Guard duplo: _hasNewRide (sheet aberto) + _fetchingRide (em andamento)
     if (_hasNewRide || _fetchingRide || !mounted) return;
-    _fetchingRide = true; // lock síncrono — antes de qualquer await
+    _fetchingRide = true;
 
     try {
       final rides = await _homeService.getPendingRides();
       if (rides.isEmpty || !mounted || _hasNewRide) return;
 
-      // Prefere a corrida do evento WS; se não existir mais, pega a primeira
       Map<String, dynamic> rideData;
       if (rideId != null) {
         rideData = rides.firstWhere(
@@ -177,7 +245,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await _notifyNewRide();
       if (mounted) _showRideRequest();
     } catch (_) {
-      // WS chegou mas API falhou — usa payload parcial como fallback visual
       if (fallbackPayload != null && mounted && !_hasNewRide) {
         final partial = {
           'id':                  fallbackPayload['ride_id'] ?? '',
@@ -189,14 +256,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'payment_method':      fallbackPayload['payment_method'],
           'fee_type':            'fixed',
           'fee_value':           0.0,
-          // Sem price_per_km — será exibido como estimativa
         };
         setState(() { _hasNewRide = true; _pendingRide = partial; });
         await _notifyNewRide();
         if (mounted) _showRideRequest();
       }
     } finally {
-      _fetchingRide = false; // libera o lock sempre
+      _fetchingRide = false;
     }
   }
 
@@ -213,13 +279,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (permission == LocationPermission.deniedForever) return;
 
       final initial = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+      );
       _onPositionUpdate(initial);
 
       _positionSub = Geolocator.getPositionStream(
         locationSettings: const LocationSettings(
           accuracy:       LocationAccuracy.high,
-          distanceFilter: 10,
+          distanceFilter: 20,
         ),
       ).listen(_onPositionUpdate);
     } catch (_) {}
@@ -229,7 +296,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() => _currentPosition = position);
     _mapController?.animateCamera(CameraUpdate.newLatLngZoom(
-      LatLng(position.latitude, position.longitude), 15));
+      LatLng(position.latitude, position.longitude), 15,
+    ));
     if (_isOnline) _homeService.updateLocation(position);
   }
 
@@ -264,7 +332,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // Toggle online
+  // Toggle online / offline
   // ─────────────────────────────────────────────────────────────
 
   Future<void> _toggleOnline() async {
@@ -313,7 +381,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       isDismissible: false,
       enableDrag:    false,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (_) => HomeRideRequestSheet(
         ride:           _pendingRide!,
         timeoutSeconds: 20,
@@ -332,7 +401,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (mounted) setState(() { _hasNewRide = false; _pendingRide = null; });
     });
   }
-  
 
   Future<void> _acceptRide(String rideId) async {
     try {
@@ -361,10 +429,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _fetchHeatmapData() async {
     try {
-      final data      = await _homeService.getMapData();
-      _heatPoints     = data['heat_points']!;
-      _searchingNow   = data['searching_now']!;
-      _onlineDrivers  = data['online_drivers']!;
+      final data     = await _homeService.getMapData();
+      _heatPoints    = data['heat_points']!;
+      _searchingNow  = data['searching_now']!;
+      _onlineDrivers = data['online_drivers']!;
       _heatLastUpdate = DateTime.now();
       _buildCircles();
     } catch (_) {}
@@ -378,13 +446,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       for (final p in _heatPoints) {
         final weight = (p['weight'] as num?)?.toDouble() ?? 0.5;
         circles.add(Circle(
-          circleId: CircleId('heat_$i'),
-          center:   LatLng((p['lat'] as num).toDouble(), (p['lng'] as num).toDouble()),
-          radius:   180,
+          circleId:  CircleId('heat_$i'),
+          center:    LatLng((p['lat'] as num).toDouble(), (p['lng'] as num).toDouble()),
+          radius:    180,
           fillColor: Color.lerp(
             Colors.orange.withValues(alpha: 0.15),
             Colors.red.withValues(alpha: 0.45),
-            weight)!,
+            weight,
+          )!,
           strokeWidth: 0,
         ));
         i++;
@@ -431,13 +500,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _startHeatRefresh() {
     _heatTimer?.cancel();
     _heatTimer = Timer.periodic(const Duration(seconds: 120), (_) async {
-      if (!mounted || !_heatmapActive) {
-        _heatTimer?.cancel();
-        return;
-      }
+      if (!mounted || !_heatmapActive) { _heatTimer?.cancel(); return; }
       await _fetchHeatmapData();
     });
   }
+
+  // ─────────────────────────────────────────────────────────────
+  // Camada de corridas no mapa
+  // ─────────────────────────────────────────────────────────────
 
   Future<void> _toggleRidesLayer() async {
     if (_ridesLayerActive) {
@@ -467,8 +537,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       markers.add(Marker(
         markerId: MarkerId('ride_${ride['id']}'),
         position: LatLng(lat, lng),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-        onTap: () => _showMapRideSheet(ride),
+        icon:     BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        onTap:    () => _showMapRideSheet(ride),
       ));
     }
     if (mounted) setState(() => _rideMarkers = markers);
@@ -477,40 +547,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _startRidesLayerRefresh() {
     _ridesTimer?.cancel();
     _ridesTimer = Timer.periodic(const Duration(seconds: 60), (_) async {
-      if (!mounted || !_ridesLayerActive) {
-        _ridesTimer?.cancel();
-        return;
-      }
+      if (!mounted || !_ridesLayerActive) { _ridesTimer?.cancel(); return; }
       await _fetchRidesLayer();
     });
   }
 
   void _showMapRideSheet(Map<String, dynamic> ride) {
     final rideId = ride['id'].toString();
-
     showModalBottomSheet(
       context:       context,
       isDismissible: true,
       enableDrag:    true,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (_) => HomeRideRequestSheet(
-        ride: ride,
-        // O sheet fecha sozinho antes de chamar estes callbacks.
-        // NÃO chamar Navigator.pop aqui — causaria double-pop e crash.
-        onAccept: () {
-          _acceptRide(rideId);
-        },
+        ride:     ride,
+        onAccept: () => _acceptRide(rideId),
         onReject: () async {
           try { await _homeService.rejectRide(rideId); } catch (_) {}
         },
       ),
     ).whenComplete(() {
-      // Executado sempre que o sheet fechar (aceitar, recusar, timeout, drag)
       if (mounted) setState(() {
         _mapRides.removeWhere((r) => r['id'].toString() == rideId);
-        _rideMarkers.removeWhere(
-          (m) => m.markerId.value == 'ride_$rideId');
+        _rideMarkers.removeWhere((m) => m.markerId.value == 'ride_$rideId');
       });
     });
   }
@@ -522,19 +583,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _showSnack(String msg, Color color) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: color));
+      SnackBar(content: Text(msg), backgroundColor: color),
+    );
   }
 
   String get _balanceLabel {
-    final b = double.tryParse(
-        _walletInfo?['balance']?.toString() ?? '0') ?? 0.0;
+    final b = double.tryParse(_walletInfo?['balance']?.toString() ?? '0') ?? 0.0;
     return 'R\$ ${b.toStringAsFixed(2)}';
   }
 
   bool get _isBalanceNegative {
-  final b = double.tryParse(_walletInfo?['balance']?.toString() ?? '0') ?? 0.0;
-  return b < 0;
-}
+    final b = double.tryParse(_walletInfo?['balance']?.toString() ?? '0') ?? 0.0;
+    return b < 0;
+  }
 
   // ─────────────────────────────────────────────────────────────
   // Build
@@ -554,12 +615,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
-                child: const Text('Não')),
+                child: const Text('Não'),
+              ),
               TextButton(
                 onPressed: () => Navigator.pop(context, true),
-                style: TextButton.styleFrom(
-                  foregroundColor: AppTheme.danger),
-                child: const Text('Sim, sair')),
+                style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+                child: const Text('Sim, sair'),
+              ),
             ],
           ),
         );
@@ -568,208 +630,204 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       },
       child: Scaffold(
-      body: _loading
-        ? const Center(child: CircularProgressIndicator())
-        : Stack(children: [
+        body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Stack(children: [
 
-            GoogleMap(
-              initialCameraPosition: CameraPosition(
-                target: _currentPosition != null
-                  ? LatLng(_currentPosition!.latitude, _currentPosition!.longitude)
-                  : const LatLng(-15.7801, -47.9292),
-                zoom: 15,
+              GoogleMap(
+                initialCameraPosition: CameraPosition(
+                  target: _currentPosition != null
+                    ? LatLng(_currentPosition!.latitude, _currentPosition!.longitude)
+                    : const LatLng(-15.7801, -47.9292),
+                  zoom: 15,
+                ),
+                myLocationEnabled:       true,
+                myLocationButtonEnabled: false,
+                zoomControlsEnabled:     false,
+                circles:  _circles,
+                markers:  _rideMarkers,
+                onMapCreated: (c) => _mapController = c,
               ),
-              myLocationEnabled:       true,
-              myLocationButtonEnabled: false,
-              zoomControlsEnabled:     false,
-              circles:  _circles,
-              markers:  _rideMarkers,
-              onMapCreated: (c) => _mapController = c,
-            ),
 
-            SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(children: [
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
 
-                      // Saldo — toque vai para carteira
-                    GestureDetector(
-  onTap: () => context.go('/wallet'),
-  child: AnimatedContainer(
-    duration: const Duration(milliseconds: 300),
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-    decoration: BoxDecoration(
-      // Se negativo, o fundo fica levemente avermelhado ou mantém branco com borda
-      color: Colors.white, 
-      borderRadius: BorderRadius.circular(12),
-      
-      boxShadow: [
-        BoxShadow(
-          color: _isBalanceNegative 
-              ? AppTheme.danger.withValues(alpha: 0.1) 
-              : Colors.black.withValues(alpha: 0.1),
-          blurRadius: 8,
-        )
-      ],
-    ),
-    child: Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            // Ícone muda para vermelho se negativo
-            color: (_isBalanceNegative ? AppTheme.danger : AppTheme.secondary)
-                .withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(
-            Icons.account_balance_wallet,
-            color: _isBalanceNegative ? AppTheme.danger : AppTheme.secondary,
-            size: 16,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Saldo',
-              style: TextStyle(fontSize: 10, color: AppTheme.gray),
-            ),
-            Text(
-              _balanceLabel,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 15,
-                // O texto do valor fica vermelho se negativo
-                color: _isBalanceNegative ? AppTheme.danger : AppTheme.dark,
-              ),
-            ),
-          ],
-        ),
-      ],
-    ),
-  ),
-),
-
-                      const Spacer(),
-
-                      
-
-                      _MapBtn(
-                        active:      _ridesLayerActive,
-                        loading:     _ridesLayerLoading,
-                        badge:       _ridesLayerActive ? _mapRides.length : 0,
-                        onTap:       _toggleRidesLayer,
-                        icon:        Icons.location_on,
-                        activeColor: Colors.green.shade600,
-                        iconColor:   Colors.green.shade600,
-                      ),
-                      const SizedBox(width: 8),
-
-                      _MapBtn(
-                        active:      _heatmapActive,
-                        loading:     _heatLoading,
-                        onTap:       _toggleHeatmap,
-                        icon:        Icons.local_fire_department,
-                        activeColor: Colors.deepOrange,
-                        iconColor:   Colors.deepOrange,
-                      ),
-                      const SizedBox(width: 8),
-
-                      _IconBtn(
-                        icon:  Icons.person_outline,
-                        color: AppTheme.dark,
-                        onTap: () => context.go('/profile'),
-                      ),
-                      const SizedBox(width: 8),
-
-                     
-                    ]),
-
-                    if (_heatmapActive) ...[
-                      const SizedBox(height: 10),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(children: [
-                          HomeHeatChip(
-                            label:  'Corridas hoje (${_heatPoints.length})',
-                            color:  Colors.deepOrange,
-                            active: _showHeat,
-                            onTap:  () {
-                              setState(() => _showHeat = !_showHeat);
-                              _buildCircles();
-                            },
-                          ),
-                          const SizedBox(width: 8),
-                          HomeHeatChip(
-                            label:  'Buscando (${_searchingNow.length})',
-                            color:  Colors.green,
-                            active: _showSearching,
-                            onTap:  () {
-                              setState(() => _showSearching = !_showSearching);
-                              _buildCircles();
-                            },
-                          ),
-                          const SizedBox(width: 8),
-                          HomeHeatChip(
-                            label:  'Motoristas (${_onlineDrivers.length})',
-                            color:  Colors.blue,
-                            active: _showDrivers,
-                            onTap:  () {
-                              setState(() => _showDrivers = !_showDrivers);
-                              _buildCircles();
-                            },
-                          ),
-                          const SizedBox(width: 8),
-                          if (_heatLastUpdate != null)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(20),
-                                boxShadow: [BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.06),
-                                  blurRadius: 4)],
-                              ),
-                              child: Row(children: [
-                                const Icon(Icons.refresh,
-                                  size: 12, color: AppTheme.gray),
-                                const SizedBox(width: 4),
-                                Text(
-                                  '${_heatLastUpdate!.hour.toString().padLeft(2, '0')}:'
-                                  '${_heatLastUpdate!.minute.toString().padLeft(2, '0')}',
-                                  style: const TextStyle(
-                                    fontSize: 11, color: AppTheme.gray)),
-                              ]),
+                        GestureDetector(
+                          onTap: () => context.go('/wallet'),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 300),
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [BoxShadow(
+                                color: _isBalanceNegative
+                                    ? AppTheme.danger.withValues(alpha: 0.1)
+                                    : Colors.black.withValues(alpha: 0.1),
+                                blurRadius: 8,
+                              )],
                             ),
-                        ]),
-                      ),
+                            child: Row(children: [
+                              Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: (_isBalanceNegative ? AppTheme.danger : AppTheme.secondary)
+                                      .withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  Icons.account_balance_wallet,
+                                  color: _isBalanceNegative ? AppTheme.danger : AppTheme.secondary,
+                                  size: 16,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Text('Saldo',
+                                    style: TextStyle(fontSize: 10, color: AppTheme.gray)),
+                                  Text(_balanceLabel,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15,
+                                      color: _isBalanceNegative ? AppTheme.danger : AppTheme.dark,
+                                    )),
+                                ],
+                              ),
+                            ]),
+                          ),
+                        ),
+
+                        const Spacer(),
+
+                        _MapBtn(
+                          active:      _ridesLayerActive,
+                          loading:     _ridesLayerLoading,
+                          badge:       _ridesLayerActive ? _mapRides.length : 0,
+                          onTap:       _toggleRidesLayer,
+                          icon:        Icons.location_on,
+                          activeColor: Colors.green.shade600,
+                          iconColor:   Colors.green.shade600,
+                        ),
+                        const SizedBox(width: 8),
+
+                        _MapBtn(
+                          active:      _heatmapActive,
+                          loading:     _heatLoading,
+                          onTap:       _toggleHeatmap,
+                          icon:        Icons.local_fire_department,
+                          activeColor: Colors.deepOrange,
+                          iconColor:   Colors.deepOrange,
+                        ),
+                        const SizedBox(width: 8),
+
+                        Stack(
+  clipBehavior: Clip.none,
+  children: [
+    _IconBtn(
+      icon:  Icons.person_outline,
+      color: AppTheme.dark,
+      onTap: () => context.go('/profile'),
+    ),
+    if (_unreadNotifications > 0)
+      Positioned(
+        right: -4, top: -4,
+        child: Container(
+          width: 16, height: 16,
+          decoration: BoxDecoration(
+            color:  AppTheme.danger,
+            shape:  BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 1.5),
+          ),
+          child: Center(
+            child: Text(
+              _unreadNotifications > 9 ? '9+' : '$_unreadNotifications',
+              style: const TextStyle(
+                fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
+      ),
+  ],
+),
+                      ]),
+
+                      if (_heatmapActive) ...[
+                        const SizedBox(height: 10),
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(children: [
+                            HomeHeatChip(
+                              label:  'Corridas hoje (${_heatPoints.length})',
+                              color:  Colors.deepOrange,
+                              active: _showHeat,
+                              onTap:  () {
+                                setState(() => _showHeat = !_showHeat);
+                                _buildCircles();
+                              },
+                            ),
+                            const SizedBox(width: 8),
+                            HomeHeatChip(
+                              label:  'Motoristas (${_onlineDrivers.length})',
+                              color:  Colors.blue,
+                              active: _showDrivers,
+                              onTap:  () {
+                                setState(() => _showDrivers = !_showDrivers);
+                                _buildCircles();
+                              },
+                            ),
+                            const SizedBox(width: 8),
+                            if (_heatLastUpdate != null)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(20),
+                                  boxShadow: [BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.06),
+                                    blurRadius: 4,
+                                  )],
+                                ),
+                                child: Row(children: [
+                                  const Icon(Icons.refresh, size: 12, color: AppTheme.gray),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '${_heatLastUpdate!.hour.toString().padLeft(2, '0')}:'
+                                    '${_heatLastUpdate!.minute.toString().padLeft(2, '0')}',
+                                    style: const TextStyle(fontSize: 11, color: AppTheme.gray),
+                                  ),
+                                ]),
+                              ),
+                          ]),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
-            ),
 
-            Positioned(
-              bottom: 0, left: 0, right: 0,
-              child: HomeBottomPanel(
-                isOnline:       _isOnline,
-                needsVehicle:   _needsVehicle,
-                needsApproval:  _needsApproval,
-                rating:         _driverInfo?['rating']?.toString() ?? '5.0',
-                balanceLabel:   _balanceLabel,
-                onToggleOnline: _toggleOnline,
+              Positioned(
+                bottom: 0, left: 0, right: 0,
+                child: HomeBottomPanel(
+                  isOnline:       _isOnline,
+                  needsVehicle:   _needsVehicle,
+                  needsApproval:  _needsApproval,
+                  rating:         _driverInfo?['rating']?.toString() ?? '5.0',
+                  balanceLabel:   _balanceLabel,
+                  onToggleOnline: _toggleOnline,
+                ),
               ),
-            ),
-          ]),
-      ), // fecha Scaffold
-    ); // fecha PopScope
+            ]),
+      ),
+    );
   }
 }
 
@@ -806,18 +864,18 @@ class _MapBtn extends StatelessWidget {
           color: active ? activeColor : Colors.white,
           borderRadius: BorderRadius.circular(12),
           boxShadow: [BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1), blurRadius: 8)],
+            color: Colors.black.withValues(alpha: 0.1), blurRadius: 8,
+          )],
         ),
         child: loading
           ? const SizedBox(
               width: 20, height: 20,
-              child: CircularProgressIndicator(
-                strokeWidth: 2, color: Colors.white))
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+            )
           : Stack(
               clipBehavior: Clip.none,
               children: [
-                Icon(icon,
-                  color: active ? Colors.white : iconColor, size: 20),
+                Icon(icon, color: active ? Colors.white : iconColor, size: 20),
                 if (badge > 0)
                   Positioned(
                     right: -6, top: -6,
@@ -826,13 +884,13 @@ class _MapBtn extends StatelessWidget {
                       decoration: BoxDecoration(
                         color:  Colors.red,
                         shape:  BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 1.5)),
+                        border: Border.all(color: Colors.white, width: 1.5),
+                      ),
                       child: Center(
                         child: Text('$badge',
                           style: const TextStyle(
-                            fontSize:   9,
-                            color:      Colors.white,
-                            fontWeight: FontWeight.bold)),
+                            fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold,
+                          )),
                       ),
                     ),
                   ),
@@ -864,7 +922,8 @@ class _IconBtn extends StatelessWidget {
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
           boxShadow: [BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1), blurRadius: 8)],
+            color: Colors.black.withValues(alpha: 0.1), blurRadius: 8,
+          )],
         ),
         child: Icon(icon, color: color, size: 20),
       ),

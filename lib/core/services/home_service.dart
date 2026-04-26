@@ -91,4 +91,8 @@ class HomeService {
       'online_drivers': List<Map<String, dynamic>>.from(res.data['online_drivers'] ?? []),
     };
   }
+
+  Future<String?> getToken() async {
+  return await _api.getToken(); // já existe no ApiClient
+}
 }
