@@ -18,8 +18,6 @@ class HomeService {
 
     final user       = UserModel.fromJson(userRes.data['user']);
     final driverData = driverRes.data['driver'] as Map<String, dynamic>?;
-
-    // /wallet/balance retorna { balance, negative_limit } no root
     final walletData = walletRes.data as Map<String, dynamic>?;
 
     final hasVehicle  = (driverData?['vehicles'] as List?)?.isNotEmpty == true;
@@ -35,8 +33,7 @@ class HomeService {
     };
   }
 
-  // ── Corrida ativa — para back-to-back ─────────────────────────
-  // Retorna o ID da corrida ativa se existir, null caso contrário
+  // ── Corrida ativa ─────────────────────────────────────────────
 
   Future<String?> checkActiveRide() async {
     try {
@@ -71,7 +68,15 @@ class HomeService {
     return rides?.cast<Map<String, dynamic>>() ?? [];
   }
 
-  // ── Aceitar / rejeitar corrida ────────────────────────────────
+  // ── Entregas pendentes ────────────────────────────────────────
+
+  Future<List<Map<String, dynamic>>> getPendingDeliveries() async {
+    final res       = await _api.dio.get('/driver/deliveries/pending');
+    final deliveries = res.data['deliveries'] as List?;
+    return deliveries?.cast<Map<String, dynamic>>() ?? [];
+  }
+
+  // ── Aceitar corrida ───────────────────────────────────────────
 
   Future<void> acceptRide(String rideId) async {
     await _api.dio.post('/rides/$rideId/accept');
@@ -81,29 +86,41 @@ class HomeService {
     await _api.dio.post('/rides/$rideId/reject');
   }
 
+  // ── Aceitar entrega ───────────────────────────────────────────
+
+  Future<void> acceptDelivery(String deliveryId) async {
+    await _api.dio.post('/deliveries/$deliveryId/accept');
+  }
+
   // ── Dados do mapa ─────────────────────────────────────────────
 
   Future<Map<String, dynamic>> getMapData() async {
     final res = await _api.dio.get('/driver/map-data');
     return {
-      'heat_points':    List<Map<String, dynamic>>.from(res.data['heat_points']    ?? []),
-      'searching_now':  List<Map<String, dynamic>>.from(res.data['searching_now']  ?? []),
-      'online_drivers': List<Map<String, dynamic>>.from(res.data['online_drivers'] ?? []),
+      'heat_points':          List<Map<String, dynamic>>.from(
+          res.data['heat_points']          ?? []),
+      'searching_now':        List<Map<String, dynamic>>.from(
+          res.data['searching_now']        ?? []),
+      'searching_deliveries': List<Map<String, dynamic>>.from(
+          res.data['searching_deliveries'] ?? []),  // ← novo
+      'online_drivers':       List<Map<String, dynamic>>.from(
+          res.data['online_drivers']       ?? []),
     };
   }
 
+  // ── Helpers ───────────────────────────────────────────────────
+
   Future<String?> getToken() async {
-  return await _api.getToken(); // já existe no ApiClient
-}
-
-Future<bool> isRideAvailable(String rideId) async {
-  try {
-    final res = await _api.dio.get('/driver/rides/pending');
-    final rides = res.data['rides'] as List? ?? [];
-    return rides.any((r) => r['id']?.toString() == rideId);
-  } catch (_) {
-    return false;
+    return await _api.getToken();
   }
-}
 
+  Future<bool> isRideAvailable(String rideId) async {
+    try {
+      final res   = await _api.dio.get('/driver/rides/pending');
+      final rides = res.data['rides'] as List? ?? [];
+      return rides.any((r) => r['id']?.toString() == rideId);
+    } catch (_) {
+      return false;
+    }
+  }
 }

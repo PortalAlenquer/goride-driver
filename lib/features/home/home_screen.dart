@@ -69,52 +69,71 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // ─────────────────────────────────────────────────────────────
 
   void _showRideRequest() {
-    if (_ctrl.pendingRide == null || !mounted) return;
-    showModalBottomSheet(
-      context:       context,
-      isDismissible: false,
-      enableDrag:    false,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (_) => HomeRideRequestSheet(
-        ride:           _ctrl.pendingRide!,
-        timeoutSeconds: 20,
-        onAccept: () => _acceptRide(_ctrl.pendingRide!['id']?.toString() ?? ''),
-        onReject: () async {
-          final rideId = _ctrl.pendingRide?['id']?.toString();
-          if (rideId != null && rideId.isNotEmpty) {
-            try { await _ctrl.homeService.rejectRide(rideId); } catch (_) {}
-          }
-        },
-      ),
-    ).whenComplete(() => _ctrl.clearRide());
-  }
+  if (_ctrl.pendingRide == null || !mounted) return;
+  final isDelivery = _ctrl.pendingRide!['service_type'] == 'delivery';
+ 
+  showModalBottomSheet(
+    context:       context,
+    isDismissible: false,
+    enableDrag:    false,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (_) => HomeRideRequestSheet(
+      ride:        _ctrl.pendingRide!,
+      isDelivery:  isDelivery,            // ← novo parâmetro
+      timeoutSeconds: 20,
+      onAccept: () {
+        final id = _ctrl.pendingRide!['id']?.toString() ?? '';
+        isDelivery ? _acceptDelivery(id) : _acceptRide(id);
+      },
+      onReject: () async {
+        final id = _ctrl.pendingRide?['id']?.toString();
+        if (id != null && id.isNotEmpty) {
+          try {
+            if (isDelivery) {
+              // delivery não tem reject endpoint ainda — só fecha
+            } else {
+              await _ctrl.homeService.rejectRide(id);
+            }
+          } catch (_) {}
+        }
+      },
+    ),
+  ).whenComplete(() => _ctrl.clearRide());
+}
 
   // ─────────────────────────────────────────────────────────────
   // Sheet de corrida — pino no mapa
   // Usa rideClosedStream para fechar via WS sem polling
   // ─────────────────────────────────────────────────────────────
 
-  void _showMapRideSheet(Map<String, dynamic> ride) {
-    final rideId = ride['id'].toString();
-    showModalBottomSheet(
-      context:       context,
-      isDismissible: true,
-      enableDrag:    true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (_) => HomeRideRequestSheet(
-        ride:             ride,
-        rideClosedStream: _ctrl.rideClosedStream, // ← WS fecha o sheet
-        onAccept:         () => _acceptRide(rideId),
-        onReject: () async {
-          try { await _ctrl.homeService.rejectRide(rideId); } catch (_) {}
-        },
-      ),
-    ).whenComplete(() => _ctrl.removeRideFromLayer(rideId));
-  }
+  void _showMapRideSheet(Map<String, dynamic> item) {
+  final id         = item['id'].toString();
+  final isDelivery = item['type'] == 'delivery';
+ 
+  showModalBottomSheet(
+    context:       context,
+    isDismissible: true,
+    enableDrag:    true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (_) => HomeRideRequestSheet(
+      ride:             item,
+      isDelivery:       isDelivery,       // ← novo parâmetro
+      rideClosedStream: _ctrl.rideClosedStream,
+      onAccept: () => isDelivery
+          ? _acceptDelivery(id)
+          : _acceptRide(id),
+      onReject: () async {
+        try {
+          if (!isDelivery) await _ctrl.homeService.rejectRide(id);
+        } catch (_) {}
+      },
+    ),
+  ).whenComplete(() => _ctrl.removeRideFromLayer(id));
+}
 
   Future<void> _acceptRide(String rideId) async {
     try {
@@ -132,6 +151,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
   }
+
+  Future<void> _acceptDelivery(String deliveryId) async {
+  try {
+    await _ctrl.homeService.acceptDelivery(deliveryId);
+    if (mounted) context.go('/delivery-detail/$deliveryId');
+  } catch (e) {
+    if (!mounted) return;
+    String msg = 'Erro ao aceitar entrega.';
+    try {
+      final data = (e as dynamic).response?.data;
+      msg = data?['message'] as String? ?? msg;
+    } catch (_) {}
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: AppTheme.warning),
+    );
+  }
+}
+ 
 
   Future<void> _toggleOnline() async {
     final error = await _ctrl.toggleOnline();

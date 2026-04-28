@@ -328,10 +328,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   onTap: () => context.push('/ride-history'),
                 ),
                 _ProfileOption(
-                  icon:  Icons.payment,
-                  label: 'Formas de pagamento aceitas',
-                  onTap: () => context.push('/payment-methods'),
-                ),
+  icon:  Icons.tune,
+  label: 'Personalização',
+  onTap: () => context.push('/preferences'),
+),
 
                 // ── Avisos / Notificações ─────────────────────
                 _ProfileOptionBadge(

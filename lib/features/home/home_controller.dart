@@ -34,9 +34,13 @@ class HomeController extends ChangeNotifier {
   bool needsVehicle  = false;
   bool needsApproval = false;
 
-  // ── Corrida pendente ──────────────────────────────────────────
-  bool                  hasNewRide   = false;
-  bool                  fetchingRide = false;
+  // ── Tipos de serviço do motorista ─────────────────────────────
+  List<String> serviceTypes = ['ride'];
+  bool get acceptsDelivery => serviceTypes.contains('delivery');
+
+  // ── Corrida/entrega pendente ──────────────────────────────────
+  bool                  hasNewRide    = false;
+  bool                  fetchingRide  = false;
   Map<String, dynamic>? pendingRide;
 
   // ── Notificações ──────────────────────────────────────────────
@@ -51,10 +55,12 @@ class HomeController extends ChangeNotifier {
   DateTime?   heatLastUpdate;
   Set<Circle> circles     = {};
   Set<Marker> rideMarkers = {};
-  List<Map<String, dynamic>> heatPoints    = [];
-  List<Map<String, dynamic>> searchingNow  = [];
-  List<Map<String, dynamic>> onlineDrivers = [];
-  List<Map<String, dynamic>> mapRides      = [];
+
+  List<Map<String, dynamic>> heatPoints         = [];
+  List<Map<String, dynamic>> searchingNow       = [];
+  List<Map<String, dynamic>> searchingDeliveries = [];
+  List<Map<String, dynamic>> onlineDrivers       = [];
+  List<Map<String, dynamic>> mapRides            = [];
 
   // ── Callbacks UI ──────────────────────────────────────────────
   VoidCallback?                        onShowRideRequest;
@@ -68,9 +74,9 @@ class HomeController extends ChangeNotifier {
   Stream<String> get rideClosedStream => _rideClosedController.stream;
 
   // ── Helpers ───────────────────────────────────────────────────
-  int get ridesCount   => mapRides.length;
-  int get heatCount    => heatPoints.length;
-  int get driversCount => onlineDrivers.length;
+  int get ridesCount    => mapRides.length;
+  int get heatCount     => heatPoints.length;
+  int get driversCount  => onlineDrivers.length;
 
   // ── Timers e streams ──────────────────────────────────────────
   Timer?                        _userTimer;
@@ -120,15 +126,25 @@ class HomeController extends ChangeNotifier {
         ),
       );
 
-      if (isOnline && !hasNewRide && message.data['type'] == 'new_ride') {
-        await fetchAndShowRide(rideId: message.data['ride_id']);
+      final type = message.data['type'];
+
+      if (isOnline && !hasNewRide) {
+        if (type == 'new_ride') {
+          await fetchAndShowRide(rideId: message.data['ride_id']);
+        } else if (type == 'new_delivery' && acceptsDelivery) {
+          await fetchAndShowDelivery(
+              deliveryId: message.data['delivery_id']);
+        }
       }
     });
 
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
       loadUnreadCount();
-      if (message.data['type'] == 'new_ride') {
+      final type = message.data['type'];
+      if (type == 'new_ride') {
         fetchAndShowRide(rideId: message.data['ride_id']);
+      } else if (type == 'new_delivery' && acceptsDelivery) {
+        fetchAndShowDelivery(deliveryId: message.data['delivery_id']);
       }
     });
   }
@@ -165,51 +181,61 @@ class HomeController extends ChangeNotifier {
     ws.off('ride.requested');
     ws.off('ride.cancelled');
     ws.off('ride.accepted');
+    ws.off('delivery.requested');
 
     await ws.connect();
     await ws.subscribeToPublic('rides');
 
-    // Nova corrida disponível
+    // Só assina canal de deliveries se o motorista aceita
+    if (acceptsDelivery) {
+      await ws.subscribeToPublic('deliveries');
+    }
+
+    // ── Corridas ──────────────────────────────────────────────
     ws.on('ride.requested', (payload) async {
       if (!isOnline || hasNewRide) return;
       await fetchAndShowRide(
-        rideId:          payload['ride_id']?.toString() ?? payload['id']?.toString(),
+        rideId:          payload['ride_id']?.toString() ??
+                         payload['id']?.toString(),
         fallbackPayload: payload,
       );
     });
 
-    // Corrida cancelada pelo passageiro
     ws.on('ride.cancelled', (payload) {
-      final cancelledId = payload['ride_id']?.toString();
-      if (cancelledId == null) return;
-
-      // Notifica sheets abertos via pino
-      _rideClosedController.add(cancelledId);
-
-      // Fecha sheet de corrida normal se estiver aberto
-      if (pendingRide?['id']?.toString() == cancelledId) {
+      final id = payload['ride_id']?.toString();
+      if (id == null) return;
+      _rideClosedController.add(id);
+      if (pendingRide?['id']?.toString() == id) {
         onRideCancelledExternally?.call();
       }
     });
 
-    // Corrida aceita por outro motorista
     ws.on('ride.accepted', (payload) {
-      final acceptedId = payload['ride_id']?.toString();
-      if (acceptedId == null) return;
-
-      // Notifica sheets abertos via pino
-      _rideClosedController.add(acceptedId);
-
-      // Fecha sheet de corrida normal se estiver aberto
-      if (pendingRide?['id']?.toString() == acceptedId) {
+      final id = payload['ride_id']?.toString();
+      if (id == null) return;
+      _rideClosedController.add(id);
+      if (pendingRide?['id']?.toString() == id) {
         onRideCancelledExternally?.call();
       }
+    });
+
+    // ── Entregas ──────────────────────────────────────────────
+    ws.on('delivery.requested', (payload) async {
+      if (!isOnline || hasNewRide || !acceptsDelivery) return;
+      await fetchAndShowDelivery(
+        deliveryId:      payload['delivery_id']?.toString(),
+        fallbackPayload: payload,
+      );
     });
 
     _fallbackTimer?.cancel();
     _fallbackTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
       if (!isOnline || hasNewRide) return;
+      // Tenta corrida primeiro, depois entrega
       await fetchAndShowRide();
+      if (!hasNewRide && acceptsDelivery) {
+        await fetchAndShowDelivery();
+      }
     });
   }
 
@@ -217,6 +243,7 @@ class HomeController extends ChangeNotifier {
     ws.off('ride.requested');
     ws.off('ride.cancelled');
     ws.off('ride.accepted');
+    ws.off('delivery.requested');
     _fallbackTimer?.cancel();
   }
 
@@ -246,8 +273,9 @@ class HomeController extends ChangeNotifier {
       }
 
       if (hasNewRide) return;
+      // Marca tipo para o sheet saber como renderizar
+      pendingRide = {...rideData, 'service_type': 'ride'};
       hasNewRide  = true;
-      pendingRide = rideData;
       notifyListeners();
       await _notifyNewRide();
       onShowRideRequest?.call();
@@ -255,6 +283,7 @@ class HomeController extends ChangeNotifier {
       if (fallbackPayload != null && !hasNewRide) {
         pendingRide = {
           'id':                  fallbackPayload['ride_id'] ?? '',
+          'service_type':        'ride',
           'estimated_price':     fallbackPayload['estimated_price'] ?? 0.0,
           'distance_km':         fallbackPayload['distance_km'],
           'duration_minutes':    fallbackPayload['duration_minutes'],
@@ -263,6 +292,61 @@ class HomeController extends ChangeNotifier {
           'payment_method':      fallbackPayload['payment_method'],
           'fee_type':            'fixed',
           'fee_value':           0.0,
+        };
+        hasNewRide = true;
+        notifyListeners();
+        await _notifyNewRide();
+        onShowRideRequest?.call();
+      }
+    } finally {
+      fetchingRide = false;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Entrega — busca e exibe
+  // ─────────────────────────────────────────────────────────────
+
+  Future<void> fetchAndShowDelivery({
+    String? deliveryId,
+    Map<String, dynamic>? fallbackPayload,
+  }) async {
+    if (hasNewRide || fetchingRide) return;
+    fetchingRide = true;
+
+    try {
+      final deliveries = await homeService.getPendingDeliveries();
+      if (deliveries.isEmpty || hasNewRide) return;
+
+      Map<String, dynamic> deliveryData;
+      if (deliveryId != null) {
+        deliveryData = deliveries.firstWhere(
+          (d) => d['id']?.toString() == deliveryId,
+          orElse: () => deliveries.first,
+        );
+      } else {
+        deliveryData = deliveries.first;
+      }
+
+      if (hasNewRide) return;
+      // Marca tipo para o sheet saber como renderizar
+      pendingRide = {...deliveryData, 'service_type': 'delivery'};
+      hasNewRide  = true;
+      notifyListeners();
+      await _notifyNewRide();
+      onShowRideRequest?.call();
+    } catch (_) {
+      if (fallbackPayload != null && !hasNewRide) {
+        pendingRide = {
+          'id':                  fallbackPayload['delivery_id'] ?? '',
+          'service_type':        'delivery',
+          'estimated_price':     fallbackPayload['estimated_price'] ?? 0.0,
+          'distance_km':         fallbackPayload['distance_km'],
+          'duration_minutes':    fallbackPayload['duration_minutes'],
+          'origin_address':      fallbackPayload['origin_address'],
+          'destination_address': fallbackPayload['destination_address'],
+          'payment_method':      fallbackPayload['payment_method'],
+          'package_description': fallbackPayload['package_description'],
         };
         hasNewRide = true;
         notifyListeners();
@@ -303,7 +387,8 @@ class HomeController extends ChangeNotifier {
       if (permission == LocationPermission.deniedForever) return;
 
       final initial = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+        locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high),
       );
       _onPositionUpdate(initial);
 
@@ -338,7 +423,14 @@ class HomeController extends ChangeNotifier {
       needsVehicle  = data['needsVehicle']  as bool;
       needsApproval = data['needsApproval'] as bool;
       isOnline      = data['isOnline']      as bool;
-      loading       = false;
+
+      // Carrega service_types do motorista
+      final types = driverInfo?['service_types'];
+      if (types is List) {
+        serviceTypes = types.cast<String>();
+      }
+
+      loading = false;
       notifyListeners();
 
       if (isOnline) await startWsRideListener();
@@ -387,12 +479,19 @@ class HomeController extends ChangeNotifier {
     mapPanelLoading = true;
     notifyListeners();
     try {
-      final data    = await homeService.getMapData();
-      heatPoints    = data['heat_points']!;
-      searchingNow  = data['searching_now']!;
-      onlineDrivers = data['online_drivers']!;
-      mapRides      = data['searching_now']!;
-      heatLastUpdate = DateTime.now();
+      final data          = await homeService.getMapData();
+      heatPoints          = data['heat_points']!;
+      searchingNow        = data['searching_now']!;
+      searchingDeliveries = data['searching_deliveries']!;
+      onlineDrivers       = data['online_drivers']!;
+      heatLastUpdate      = DateTime.now();
+
+      // Mescla corridas + entregas para os markers
+      mapRides = [
+        ...searchingNow,
+        ...searchingDeliveries,
+      ];
+
       if (layerHeat || layerDrivers) buildCircles();
       if (layerRides) _buildRideMarkers();
     } catch (_) {
@@ -503,26 +602,37 @@ class HomeController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Markers: verde para corridas, laranja para entregas
   void _buildRideMarkers() {
     final markers = <Marker>{};
-    for (final ride in mapRides) {
-      final lat      = (ride['lat'] as num).toDouble();
-      final lng      = (ride['lng'] as num).toDouble();
-      final rideCopy = Map<String, dynamic>.from(ride);
+
+    for (final item in mapRides) {
+      final lat      = (item['lat'] as num).toDouble();
+      final lng      = (item['lng'] as num).toDouble();
+      final isDelivery = item['type'] == 'delivery';
+      final itemCopy = Map<String, dynamic>.from(item);
+
       markers.add(Marker(
-        markerId: MarkerId('ride_${ride['id']}'),
+        markerId: MarkerId('${item['type']}_${item['id']}'),
         position: LatLng(lat, lng),
-        icon:     BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-        onTap:    () => onRideMarkerTap?.call(rideCopy),
+        icon:     BitmapDescriptor.defaultMarkerWithHue(
+          isDelivery
+              ? BitmapDescriptor.hueOrange  // laranja para entregas
+              : BitmapDescriptor.hueGreen,  // verde para corridas
+        ),
+        onTap: () => onRideMarkerTap?.call(itemCopy),
       ));
     }
+
     rideMarkers = markers;
     notifyListeners();
   }
 
-  void removeRideFromLayer(String rideId) {
-    mapRides.removeWhere((r) => r['id'].toString() == rideId);
-    rideMarkers.removeWhere((m) => m.markerId.value == 'ride_$rideId');
+  void removeRideFromLayer(String id) {
+    mapRides.removeWhere((r) => r['id'].toString() == id);
+    rideMarkers.removeWhere((m) =>
+        m.markerId.value == 'ride_$id' ||
+        m.markerId.value == 'delivery_$id');
     notifyListeners();
   }
 
@@ -531,12 +641,14 @@ class HomeController extends ChangeNotifier {
   // ─────────────────────────────────────────────────────────────
 
   String get balanceLabel {
-    final b = double.tryParse(walletInfo?['balance']?.toString() ?? '0') ?? 0.0;
+    final b = double.tryParse(
+        walletInfo?['balance']?.toString() ?? '0') ?? 0.0;
     return 'R\$ ${b.toStringAsFixed(2)}';
   }
 
   bool get isBalanceNegative {
-    final b = double.tryParse(walletInfo?['balance']?.toString() ?? '0') ?? 0.0;
+    final b = double.tryParse(
+        walletInfo?['balance']?.toString() ?? '0') ?? 0.0;
     return b < 0;
   }
 
@@ -555,6 +667,7 @@ class HomeController extends ChangeNotifier {
     ws.off('ride.requested');
     ws.off('ride.cancelled');
     ws.off('ride.accepted');
+    ws.off('delivery.requested');
     ws.disconnect();
     super.dispose();
   }

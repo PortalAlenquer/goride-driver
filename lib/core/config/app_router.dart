@@ -8,7 +8,7 @@ import '../../features/profile/profile_screen.dart';
 import '../../features/profile/wallet_screen.dart';
 import '../../features/profile/ride_history_screen.dart';
 import '../../features/profile/change_password_screen.dart';
-import '../../features/profile/payment_methods_screen.dart';
+import '../../features/profile/preferences_screen.dart';
 import '../../features/profile/complete_profile_screen.dart';
 import '../../features/profile/support_screen.dart';
 import '../../features/profile/earnings_screen.dart';
@@ -29,7 +29,7 @@ class AppRouter {
       GoRoute(path: '/wallet',           builder: (context, _) => const WalletScreen()),
       GoRoute(path: '/ride-history',     builder: (context, _) => const RideHistoryScreen()),
       GoRoute(path: '/change-password',  builder: (context, _) => const ChangePasswordScreen()),
-      GoRoute(path: '/payment-methods',  builder: (context, _) => const PaymentMethodsScreen()),
+      GoRoute(path: '/preferences',  builder: (context, _) => const PreferencesScreen()),
       GoRoute(path: '/complete-profile', builder: (context, _) => const CompleteProfileScreen()),
       GoRoute(path: '/earnings',         builder: (context, __) => const EarningsScreen()),
       GoRoute(path: '/support', builder: (context, _) => const SupportScreen()),

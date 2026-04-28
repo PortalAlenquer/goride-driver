@@ -9,8 +9,7 @@ class HomeRideRequestSheet extends StatefulWidget {
   final VoidCallback             onAccept;
   final Future<void> Function()  onReject;
   final int                      timeoutSeconds;
-  // Stream do WS — fecha o sheet quando a corrida for aceita/cancelada
-  // Usado apenas quando aberto via pino no mapa
+  final bool                     isDelivery;      // ← novo
   final Stream<String>?          rideClosedStream;
 
   const HomeRideRequestSheet({
@@ -19,6 +18,7 @@ class HomeRideRequestSheet extends StatefulWidget {
     required this.onAccept,
     required this.onReject,
     this.timeoutSeconds   = 120,
+    this.isDelivery       = false,
     this.rideClosedStream,
   });
 
@@ -37,7 +37,6 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
     super.initState();
     _remaining = widget.timeoutSeconds;
 
-    // Countdown
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) { t.cancel(); return; }
       setState(() => _remaining--);
@@ -45,11 +44,10 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
       if (_remaining <= 0) { t.cancel(); _autoReject(); }
     });
 
-    // Escuta stream do WS — fecha quando corrida não estiver mais disponível
     if (widget.rideClosedStream != null) {
-      final myRideId = widget.ride['id']?.toString();
-      _closedSub = widget.rideClosedStream!.listen((closedRideId) {
-        if (closedRideId == myRideId && mounted && !_dismissed) {
+      final myId = widget.ride['id']?.toString();
+      _closedSub = widget.rideClosedStream!.listen((closedId) {
+        if (closedId == myId && mounted && !_dismissed) {
           _dismissUnavailable();
         }
       });
@@ -70,7 +68,7 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
     if (Navigator.canPop(context)) Navigator.pop(context);
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content:         Text('Corrida não está mais disponível.'),
+        content:         Text('Não está mais disponível.'),
         backgroundColor: AppTheme.warning,
         duration:        Duration(seconds: 3),
       ),
@@ -103,7 +101,7 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
     widget.onReject();
   }
 
-  // ── Helpers de dados ──────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────
 
   Map<String, dynamic> get _ride => widget.ride;
 
@@ -143,7 +141,8 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
       double.tryParse(_passenger?['rating']?.toString() ?? '5') ?? 5.0;
 
   int get _passengerRides =>
-      int.tryParse(_passenger?['total_rides']?.toString() ?? '0') ?? 0;
+      int.tryParse((_passenger?['total_rides'] ??
+          _passenger?['total_orders'])?.toString() ?? '0') ?? 0;
 
   String get _paymentMethod =>
       _ride['payment_method']?.toString() ?? 'cash';
@@ -167,6 +166,12 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
     if (_passengerRating >= 4.0) return AppTheme.warning;
     return AppTheme.danger;
   }
+
+  String get _title =>
+      widget.isDelivery ? 'Nova Entrega' : 'Nova Corrida';
+
+  Color get _accentColor =>
+      widget.isDelivery ? Colors.orange : AppTheme.secondary;
 
   @override
   Widget build(BuildContext context) {
@@ -198,16 +203,23 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
 
-                // Título + pagamento
+                // ── Título + pagamento ─────────────────────────
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Nova Corrida',
-                      style: TextStyle(
-                        fontSize:      18,
-                        fontWeight:    FontWeight.w600,
-                        color:         AppTheme.gray,
-                        letterSpacing: 0.5)),
+                    Row(children: [
+                      if (widget.isDelivery) ...[
+                        Icon(Icons.delivery_dining,
+                            color: Colors.orange, size: 18),
+                        const SizedBox(width: 6),
+                      ],
+                      Text(_title,
+                        style: TextStyle(
+                          fontSize:      18,
+                          fontWeight:    FontWeight.w600,
+                          color:         AppTheme.gray,
+                          letterSpacing: 0.5)),
+                    ]),
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 5),
@@ -229,7 +241,7 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
 
                 const SizedBox(height: 12),
 
-                // Valor
+                // ── Valor ──────────────────────────────────────
                 Text(
                   'R\$ ${_price.toStringAsFixed(2)}',
                   style: const TextStyle(
@@ -241,7 +253,7 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
 
                 const SizedBox(height: 10),
 
-                // Surge
+                // ── Surge ──────────────────────────────────────
                 if (_hasSurge) ...[
                   const SizedBox(height: 8),
                   Container(
@@ -269,7 +281,7 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
                   ),
                 ],
 
-                // Métricas
+                // ── Métricas ───────────────────────────────────
                 Row(children: [
                   if (_distKm > 0) ...[
                     const Icon(Icons.straighten,
@@ -280,16 +292,51 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
                           fontSize: 15, color: AppTheme.gray)),
                     const SizedBox(width: 12),
                   ],
-                  const Icon(Icons.route, size: 14, color: AppTheme.gray),
-                  const SizedBox(width: 4),
-                  Text(
-                    'R\$ ${_pricePerKm.toStringAsFixed(2)}/km'
-                    '${_hasPricePerKm ? '' : '*'}',
-                    style: const TextStyle(
-                        fontSize: 13, color: AppTheme.gray)),
+                  if (!widget.isDelivery) ...[
+                    const Icon(Icons.route, size: 14, color: AppTheme.gray),
+                    const SizedBox(width: 4),
+                    Text(
+                      'R\$ ${_pricePerKm.toStringAsFixed(2)}/km'
+                      '${_hasPricePerKm ? '' : '*'}',
+                      style: const TextStyle(
+                          fontSize: 13, color: AppTheme.gray)),
+                  ],
                 ]),
 
-                // Card passageiro
+                // ── Descrição do pacote (só delivery) ──────────
+                if (widget.isDelivery &&
+                    _ride['package_description'] != null &&
+                    (_ride['package_description'] as String).isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color:        Colors.orange.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                          color: Colors.orange.withValues(alpha: 0.2)),
+                    ),
+                    child: Row(children: [
+                      const Icon(Icons.inventory_2_outlined,
+                          size: 16, color: Colors.orange),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _ride['package_description'].toString(),
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color:    AppTheme.gray,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ]),
+                  ),
+                ],
+
+                // ── Card passageiro/solicitante ─────────────────
                 Container(
                   margin:  const EdgeInsets.symmetric(vertical: 12),
                   padding: const EdgeInsets.all(12),
@@ -310,8 +357,11 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
                           blurRadius: 4,
                         )],
                       ),
-                      child: const Icon(Icons.person,
-                          color: AppTheme.gray, size: 20),
+                      child: Icon(
+                        widget.isDelivery
+                            ? Icons.person_outline
+                            : Icons.person,
+                        color: AppTheme.gray, size: 20),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -334,8 +384,10 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
                         const SizedBox(width: 8),
                         Text(
                           _passengerRides > 0
-                              ? '$_passengerRides corridas'
-                              : 'Novo passageiro',
+                              ? '$_passengerRides ${widget.isDelivery ? 'pedidos' : 'corridas'}'
+                              : widget.isDelivery
+                                  ? 'Novo solicitante'
+                                  : 'Novo passageiro',
                           style: const TextStyle(
                             fontSize:   14,
                             color:      AppTheme.gray,
@@ -346,13 +398,15 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
                   ]),
                 ),
 
-                // Rota origem
+                // ── Rota origem ────────────────────────────────
                 _RouteRow(
                   isOrigin:   true,
                   address:    _ride['origin_address']?.toString() ?? '—',
                   timeBadge:  '$_pickupMin min',
                   badgeColor: AppTheme.primary,
-                  badgeIcon:  Icons.directions_car,
+                  badgeIcon:  widget.isDelivery
+                      ? Icons.store_outlined
+                      : Icons.directions_car,
                 ),
 
                 Padding(
@@ -365,12 +419,12 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
                   ),
                 ),
 
-                // Rota destino
+                // ── Rota destino ───────────────────────────────
                 _RouteRow(
                   isOrigin:   false,
                   address:    _ride['destination_address']?.toString() ?? '—',
                   timeBadge:  _durationMin > 0 ? '$_durationMin min' : '—',
-                  badgeColor: AppTheme.secondary,
+                  badgeColor: _accentColor,
                   badgeIcon:  Icons.access_time,
                 ),
 
@@ -378,13 +432,15 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
                 const Divider(height: 1),
                 const SizedBox(height: 14),
 
-                // Slider
+                // ── Slider ─────────────────────────────────────
                 RideSlider(
-                  confirmLabel: 'Aceitar',
+                  confirmLabel: widget.isDelivery ? 'Aceitar entrega' : 'Aceitar',
                   rejectLabel:  'Pular',
-                  confirmColor: AppTheme.secondary,
+                  confirmColor: _accentColor,
                   rejectColor:  AppTheme.gray,
-                  thumbIcon:    Icons.directions_car,
+                  thumbIcon:    widget.isDelivery
+                      ? Icons.delivery_dining
+                      : Icons.directions_car,
                   countdown:    _remaining,
                   onConfirm:    _handleAccept,
                   onReject:     _handleReject,
@@ -397,6 +453,10 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
     );
   }
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Linha de rota
+// ─────────────────────────────────────────────────────────────────
 
 class _RouteRow extends StatelessWidget {
   final bool     isOrigin;
