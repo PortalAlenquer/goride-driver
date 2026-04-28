@@ -95,4 +95,15 @@ class HomeService {
   Future<String?> getToken() async {
   return await _api.getToken(); // já existe no ApiClient
 }
+
+Future<bool> isRideAvailable(String rideId) async {
+  try {
+    final res = await _api.dio.get('/driver/rides/pending');
+    final rides = res.data['rides'] as List? ?? [];
+    return rides.any((r) => r['id']?.toString() == rideId);
+  } catch (_) {
+    return false;
+  }
+}
+
 }

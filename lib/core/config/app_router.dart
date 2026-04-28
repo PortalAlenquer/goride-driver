@@ -15,7 +15,7 @@ import '../../features/profile/earnings_screen.dart';
 import '../../features/ride/passenger_rating_screen.dart';
 import '../../features/ride/ride_payment_screen.dart';
 import '../../features/notifications/notifications_screen.dart';
-
+import '../../features/profile/delete_account_screen.dart';
 
 class AppRouter {
   static final GoRouter router = GoRouter(
@@ -34,6 +34,7 @@ class AppRouter {
       GoRoute(path: '/earnings',         builder: (context, __) => const EarningsScreen()),
       GoRoute(path: '/support', builder: (context, _) => const SupportScreen()),
       GoRoute(path: '/notifications', builder: (context, _) => const NotificationsScreen()),
+      GoRoute(path: '/delete-account', builder: (context, _) => const DeleteAccountScreen()),
       GoRoute(
         path: '/ride-detail/:id',
         builder: (_, state) => RideDetailScreen(

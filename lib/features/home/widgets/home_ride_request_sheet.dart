@@ -4,38 +4,22 @@ import 'package:flutter/services.dart';
 import '../../../core/config/app_theme.dart';
 import '../../ride/widgets/slide_action_button.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Layout padrão mercado (Uber/99):
-//
-//  ┌─────────────────────────────────────┐
-//  │  Nova Corrida              [💳 PIX] │
-//  │                                     │
-//  │         R$ 24,90                    │  ← valor grande
-//  │   ★ 4.8  · 127 corridas            │  ← passageiro
-//  │   ⚡ Demanda alta 1.5x              │  ← surge (condicional)
-//  ├─────────────────────────────────────┤
-//  │  [🚗 4 min]  Rua das Flores, 142   │  ← origem + tempo até
-//  │       │                             │
-//  │  [⏱ 12 min] Av. Paulista, 900      │  ← destino + duração
-//  ├─────────────────────────────────────┤
-//  │  2,4 km  ·  R$ 2,10/km            │  ← métricas
-//  ├─────────────────────────────────────┤
-//  │  [Pular] ←← [🚗 contador] →→ [Aceitar] │
-//  └─────────────────────────────────────┘
-// ─────────────────────────────────────────────────────────────────────────────
-
 class HomeRideRequestSheet extends StatefulWidget {
-  final Map<String, dynamic>    ride;
-  final VoidCallback            onAccept;
-  final Future<void> Function() onReject;
-  final int                     timeoutSeconds;
+  final Map<String, dynamic>     ride;
+  final VoidCallback             onAccept;
+  final Future<void> Function()  onReject;
+  final int                      timeoutSeconds;
+  // Stream do WS — fecha o sheet quando a corrida for aceita/cancelada
+  // Usado apenas quando aberto via pino no mapa
+  final Stream<String>?          rideClosedStream;
 
   const HomeRideRequestSheet({
     super.key,
     required this.ride,
     required this.onAccept,
     required this.onReject,
-    this.timeoutSeconds = 120,
+    this.timeoutSeconds   = 120,
+    this.rideClosedStream,
   });
 
   @override
@@ -44,27 +28,59 @@ class HomeRideRequestSheet extends StatefulWidget {
 
 class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
   late int _remaining;
-  Timer?   _timer;
-  bool     _dismissed = false;
+  Timer?              _countdownTimer;
+  StreamSubscription? _closedSub;
+  bool                _dismissed = false;
 
   @override
   void initState() {
     super.initState();
     _remaining = widget.timeoutSeconds;
-    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+
+    // Countdown
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) { t.cancel(); return; }
       setState(() => _remaining--);
       if (_remaining <= 5 && _remaining > 0) HapticFeedback.lightImpact();
       if (_remaining <= 0) { t.cancel(); _autoReject(); }
     });
+
+    // Escuta stream do WS — fecha quando corrida não estiver mais disponível
+    if (widget.rideClosedStream != null) {
+      final myRideId = widget.ride['id']?.toString();
+      _closedSub = widget.rideClosedStream!.listen((closedRideId) {
+        if (closedRideId == myRideId && mounted && !_dismissed) {
+          _dismissUnavailable();
+        }
+      });
+    }
   }
 
   @override
-  void dispose() { _timer?.cancel(); super.dispose(); }
+  void dispose() {
+    _countdownTimer?.cancel();
+    _closedSub?.cancel();
+    super.dispose();
+  }
+
+  void _dismissUnavailable() {
+    if (_dismissed || !mounted) return;
+    _dismissed = true;
+    _countdownTimer?.cancel();
+    if (Navigator.canPop(context)) Navigator.pop(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content:         Text('Corrida não está mais disponível.'),
+        backgroundColor: AppTheme.warning,
+        duration:        Duration(seconds: 3),
+      ),
+    );
+  }
 
   void _autoReject() {
     if (_dismissed || !mounted) return;
     _dismissed = true;
+    _closedSub?.cancel();
     if (Navigator.canPop(context)) Navigator.pop(context);
     widget.onReject();
   }
@@ -72,7 +88,8 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
   void _handleAccept() {
     if (_dismissed) return;
     _dismissed = true;
-    _timer?.cancel();
+    _countdownTimer?.cancel();
+    _closedSub?.cancel();
     if (Navigator.canPop(context)) Navigator.pop(context);
     widget.onAccept();
   }
@@ -80,7 +97,8 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
   void _handleReject() {
     if (_dismissed) return;
     _dismissed = true;
-    _timer?.cancel();
+    _countdownTimer?.cancel();
+    _closedSub?.cancel();
     if (Navigator.canPop(context)) Navigator.pop(context);
     widget.onReject();
   }
@@ -98,10 +116,8 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
   int get _durationMin =>
       int.tryParse(_ride['duration_minutes']?.toString() ?? '0') ?? 0;
 
-  // Tempo estimado até o passageiro (~40% da duração da viagem)
   int get _pickupMin => (_durationMin * 0.4).round().clamp(1, 99);
 
-  // R$/km real da tabela (preferível) ou fallback com divisão
   double get _pricePerKm {
     final real = double.tryParse(_ride['price_per_km']?.toString() ?? '');
     if (real != null && real > 0) return real;
@@ -112,14 +128,14 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
       double.tryParse(_ride['price_per_km']?.toString() ?? '') != null;
 
   bool get _hasSurge {
-    final v = double.tryParse(_ride['surge_multiplier']?.toString() ?? '1') ?? 1.0;
+    final v = double.tryParse(
+        _ride['surge_multiplier']?.toString() ?? '1') ?? 1.0;
     return v > 1.0;
   }
 
   double get _surgeMultiplier =>
       double.tryParse(_ride['surge_multiplier']?.toString() ?? '1') ?? 1.0;
 
-  // Passageiro
   Map<String, dynamic>? get _passenger =>
       _ride['passenger'] as Map<String, dynamic>?;
 
@@ -146,7 +162,6 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
     _        => 'Dinheiro',
   };
 
-  // Cor da avaliação do passageiro
   Color get _ratingColor {
     if (_passengerRating >= 4.5) return AppTheme.secondary;
     if (_passengerRating >= 4.0) return AppTheme.warning;
@@ -164,7 +179,6 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
         mainAxisSize: MainAxisSize.min,
         children: [
 
-          // Handle
           Padding(
             padding: const EdgeInsets.only(top: 10, bottom: 4),
             child: Container(
@@ -184,19 +198,19 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
 
-                // ── Título + pagamento ───────────────────────
+                // Título + pagamento
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const Text('Nova Corrida',
                       style: TextStyle(
-                        fontSize:   18,
-                        fontWeight: FontWeight.w600,
-                        color:      AppTheme.gray,
+                        fontSize:      18,
+                        fontWeight:    FontWeight.w600,
+                        color:         AppTheme.gray,
                         letterSpacing: 0.5)),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 5),
+                          horizontal: 10, vertical: 5),
                       decoration: BoxDecoration(
                         color:        AppTheme.primary.withValues(alpha: 0.08),
                         borderRadius: BorderRadius.circular(20)),
@@ -215,34 +229,34 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
 
                 const SizedBox(height: 12),
 
-                // ── Valor em destaque ────────────────────────
+                // Valor
                 Text(
                   'R\$ ${_price.toStringAsFixed(2)}',
                   style: const TextStyle(
-                    fontSize:   44,
-                    fontWeight: FontWeight.bold,
-                    color:      AppTheme.dark,
-                    height:     1.0,
+                    fontSize:      44,
+                    fontWeight:    FontWeight.bold,
+                    color:         AppTheme.dark,
+                    height:        1.0,
                     letterSpacing: -1)),
 
                 const SizedBox(height: 10),
 
-                // ── Surge (demanda alta) ─────────────────────
+                // Surge
                 if (_hasSurge) ...[
                   const SizedBox(height: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 5),
+                        horizontal: 10, vertical: 5),
                     decoration: BoxDecoration(
                       color:        AppTheme.warning.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: AppTheme.warning.withValues(alpha: 0.3))),
+                          color: AppTheme.warning.withValues(alpha: 0.3))),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         const Icon(Icons.bolt,
-                          size: 14, color: AppTheme.warning),
+                            size: 14, color: AppTheme.warning),
                         const SizedBox(width: 4),
                         Text(
                           'Demanda alta · ${_surgeMultiplier.toStringAsFixed(1)}x',
@@ -255,107 +269,92 @@ class _HomeRideRequestSheetState extends State<HomeRideRequestSheet> {
                   ),
                 ],
 
-              // ── Métricas: km · R$/km ─────────────────────
+                // Métricas
                 Row(children: [
                   if (_distKm > 0) ...[
                     const Icon(Icons.straighten,
-                      size: 14, color: AppTheme.gray),
+                        size: 14, color: AppTheme.gray),
                     const SizedBox(width: 4),
-                    Text(
-                      '${_distKm.toStringAsFixed(1)} km',
+                    Text('${_distKm.toStringAsFixed(1)} km',
                       style: const TextStyle(
-                        fontSize: 15, color: AppTheme.gray)),
+                          fontSize: 15, color: AppTheme.gray)),
                     const SizedBox(width: 12),
                   ],
-                  const Icon(Icons.route,
-                    size: 14, color: AppTheme.gray),
+                  const Icon(Icons.route, size: 14, color: AppTheme.gray),
                   const SizedBox(width: 4),
                   Text(
                     'R\$ ${_pricePerKm.toStringAsFixed(2)}/km'
                     '${_hasPricePerKm ? '' : '*'}',
                     style: const TextStyle(
-                      fontSize: 13, color: AppTheme.gray)),
+                        fontSize: 13, color: AppTheme.gray)),
                 ]),
-                
-               // ── Card do Passageiro ───────────────────────────
-Container(
-  margin: const EdgeInsets.symmetric(vertical: 12),
-  padding: const EdgeInsets.all(12),
-  decoration: BoxDecoration(
-    color: const Color(0xFFF9FAFB), // Um cinza bem claro para destacar do fundo branco
-    borderRadius: BorderRadius.circular(12),
-    border: Border.all(color: Colors.black.withValues(alpha: 0.05)),
-  ),
-  child: Row(
-    children: [
-      // Ícone de Perfil destacado
-      Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 4,
-            )
-          ],
-        ),
-        child: const Icon(Icons.person, color: AppTheme.gray, size: 20),
-      ),
-      const SizedBox(width: 12),
-      
-      // Informações: Nota e Corridas
-      Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.star_rounded, color: _ratingColor, size: 18),
-                const SizedBox(width: 4),
-                Text(
-                  _passengerRating.toStringAsFixed(1),
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: _ratingColor,
+
+                // Card passageiro
+                Container(
+                  margin:  const EdgeInsets.symmetric(vertical: 12),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color:        const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                        color: Colors.black.withValues(alpha: 0.05)),
                   ),
+                  child: Row(children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color:  Colors.white,
+                        shape:  BoxShape.circle,
+                        boxShadow: [BoxShadow(
+                          color:      Colors.black.withValues(alpha: 0.05),
+                          blurRadius: 4,
+                        )],
+                      ),
+                      child: const Icon(Icons.person,
+                          color: AppTheme.gray, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Row(children: [
+                        Icon(Icons.star_rounded,
+                            color: _ratingColor, size: 18),
+                        const SizedBox(width: 4),
+                        Text(
+                          _passengerRating.toStringAsFixed(1),
+                          style: TextStyle(
+                            fontSize:   15,
+                            fontWeight: FontWeight.bold,
+                            color:      _ratingColor,
+                          )),
+                        const SizedBox(width: 8),
+                        Text('·',
+                          style: TextStyle(
+                            color:    AppTheme.gray.withValues(alpha: 0.5),
+                            fontSize: 15)),
+                        const SizedBox(width: 8),
+                        Text(
+                          _passengerRides > 0
+                              ? '$_passengerRides corridas'
+                              : 'Novo passageiro',
+                          style: const TextStyle(
+                            fontSize:   14,
+                            color:      AppTheme.gray,
+                            fontWeight: FontWeight.w500,
+                          )),
+                      ]),
+                    ),
+                  ]),
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  '·',
-                  style: TextStyle(color: AppTheme.gray.withValues(alpha: 0.5), fontSize: 15),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  _passengerRides > 0
-                      ? '$_passengerRides corridas'
-                      : 'Novo passageiro',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    color: AppTheme.gray,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    ],
-  ),
-),
-                // ── Rota: Origem ─────────────────────────────
+
+                // Rota origem
                 _RouteRow(
-                  isOrigin:  true,
-                  address:   _ride['origin_address']?.toString() ?? '—',
-                  timeBadge: '$_pickupMin min',
+                  isOrigin:   true,
+                  address:    _ride['origin_address']?.toString() ?? '—',
+                  timeBadge:  '$_pickupMin min',
                   badgeColor: AppTheme.primary,
                   badgeIcon:  Icons.directions_car,
                 ),
 
-                // Linha conectora
                 Padding(
                   padding: const EdgeInsets.only(left: 5),
                   child: Column(
@@ -366,7 +365,7 @@ Container(
                   ),
                 ),
 
-                // ── Rota: Destino ────────────────────────────
+                // Rota destino
                 _RouteRow(
                   isOrigin:   false,
                   address:    _ride['destination_address']?.toString() ?? '—',
@@ -375,15 +374,11 @@ Container(
                   badgeIcon:  Icons.access_time,
                 ),
 
-                const SizedBox(height: 14),
-
-                
-
                 const SizedBox(height: 16),
                 const Divider(height: 1),
                 const SizedBox(height: 14),
 
-                // ── Slider ───────────────────────────────────
+                // Slider
                 RideSlider(
                   confirmLabel: 'Aceitar',
                   rejectLabel:  'Pular',
@@ -403,15 +398,11 @@ Container(
   }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Linha de rota — origem ou destino com badge de tempo
-// ─────────────────────────────────────────────────────────────────
-
 class _RouteRow extends StatelessWidget {
-  final bool    isOrigin;
-  final String  address;
-  final String  timeBadge;
-  final Color   badgeColor;
+  final bool     isOrigin;
+  final String   address;
+  final String   timeBadge;
+  final Color    badgeColor;
   final IconData badgeIcon;
 
   const _RouteRow({
@@ -427,27 +418,20 @@ class _RouteRow extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-
-        // Indicador de ponto
         Container(
           width: 12, height: 12,
           decoration: isOrigin
             ? BoxDecoration(
                 shape:  BoxShape.circle,
                 color:  Colors.white,
-                border: Border.all(
-                  color: AppTheme.primary, width: 2.5))
+                border: Border.all(color: AppTheme.primary, width: 2.5))
             : BoxDecoration(
                 color:        AppTheme.danger,
                 borderRadius: BorderRadius.circular(3)),
         ),
-
         const SizedBox(width: 12),
-
-        // Endereço — fonte maior para facilitar leitura
         Expanded(
-          child: Text(
-            address,
+          child: Text(address,
             style: const TextStyle(
               fontSize:   15,
               fontWeight: FontWeight.w500,
@@ -456,13 +440,9 @@ class _RouteRow extends StatelessWidget {
             maxLines: 2,
             overflow: TextOverflow.ellipsis),
         ),
-
         const SizedBox(width: 8),
-
-        // Badge de tempo
         Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: 8, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
             color:        badgeColor.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(12)),
@@ -471,8 +451,7 @@ class _RouteRow extends StatelessWidget {
             children: [
               Icon(badgeIcon, size: 11, color: badgeColor),
               const SizedBox(width: 3),
-              Text(
-                timeBadge,
+              Text(timeBadge,
                 style: TextStyle(
                   fontSize:   11,
                   fontWeight: FontWeight.bold,

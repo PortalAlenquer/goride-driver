@@ -355,6 +355,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   label: 'Alterar senha',
                   onTap: () => context.push('/change-password'),
                 ),
+
+                _ProfileOption(
+                icon:  Icons.delete_forever_outlined,
+                label: 'Excluir conta',
+                onTap: () => context.push('/delete-account'),
+                ),
               ],
             ),
           ),
